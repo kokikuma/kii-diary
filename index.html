@@ -54,10 +54,23 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
           <button id="driveConnectBtn" type="button">Drive写真を接続</button>
           <button id="driveRefreshBtn" type="button">Drive写真を再読込</button>
         </div>
-        <label style="display:block;margin-top:10px;padding:10px;border:1px dashed #c6bdb4;border-radius:9px;background:#fff">
-          Facebook写真をDriveへ（テスト）
-          <input id="drivePhotoUpload" type="file" accept="image/*" multiple style="margin-top:7px;padding:0;border:0" />
-        </label>
+        <div style="display:block;margin-top:10px;padding:10px;border:1px dashed #c6bdb4;border-radius:9px;background:#fff">
+          <div style="font-weight:700;margin-bottom:6px">Facebook写真をDriveへ（大量アップロード）</div>
+          <div style="color:#888;margin-bottom:8px">途中で止まっても、同じフォルダを選び直せばアップ済み写真は自動でスキップします。</div>
+          <label style="display:block;margin:5px 0">写真フォルダを選ぶ
+            <input id="drivePhotoFolderUpload" type="file" accept="image/*" webkitdirectory directory multiple style="margin-top:7px;padding:0;border:0" />
+          </label>
+          <div style="margin:7px 0;color:#999">または</div>
+          <label style="display:block;margin:5px 0">写真を複数選ぶ
+            <input id="drivePhotoUpload" type="file" accept="image/*" multiple style="margin-top:7px;padding:0;border:0" />
+          </label>
+          <div class="actions" style="flex-wrap:wrap;margin-top:8px">
+            <button id="driveUploadPauseBtn" type="button" disabled>一時停止</button>
+            <button id="driveUploadResumeBtn" type="button" disabled>再開</button>
+          </div>
+          <div id="driveUploadProgress" style="margin-top:8px;color:#666">待機中</div>
+          <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px"><div id="driveUploadBar" style="height:100%;width:0%;background:#56C3F0"></div></div>
+        </div>
         <div id="driveState" style="margin-top:7px;color:#888">Drive写真：未接続（このアプリ専用の写真だけ扱います）</div>
       </div>
     </details>
@@ -157,7 +170,7 @@ async function firebaseLogin(){
   await fbFns.signInWithPopup(fbAuth,provider);
 }
 
-// ---- Google Drive photo test (least-privilege: drive.file only) ----
+// ---- Google Drive photo bulk uploader (least-privilege: drive.file only) ----
 let driveAccessToken=sessionStorage.getItem('kiiDriveAccessToken')||'';
 let driveFolderId='';
 let drivePhotosByDate=new Map();
@@ -233,32 +246,120 @@ async function loadDrivePhotoIndex(){
   driveState(`Drive写真：${count}枚を認識しました（アプリ専用）`);
   await render();
 }
+let driveUploadPaused=false;
+let driveUploadCancelled=false;
+let driveWakeLock=null;
+
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+function setDriveUploadProgress(done,total,uploaded,skipped,failed,current=''){
+  const p=document.getElementById('driveUploadProgress');
+  const b=document.getElementById('driveUploadBar');
+  const pct=total?Math.round(done/total*100):0;
+  if(b)b.style.width=`${pct}%`;
+  if(p)p.textContent=total?`${done} / ${total}（保存 ${uploaded}・既存 ${skipped}・失敗 ${failed}）${current?`  ${current}`:''}`:'待機中';
+}
+async function requestDriveWakeLock(){
+  try{
+    if('wakeLock' in navigator){driveWakeLock=await navigator.wakeLock.request('screen')}
+  }catch(e){console.warn('Wake Lock unavailable',e)}
+}
+async function releaseDriveWakeLock(){
+  try{await driveWakeLock?.release()}catch{}
+  driveWakeLock=null;
+}
+async function listDriveExistingFiles(){
+  await ensureDriveFolder();
+  const byName=new Map(); let token='';
+  do{
+    const fq=encodeURIComponent(`'${driveFolderId}' in parents and trashed=false`);
+    let url=`https://www.googleapis.com/drive/v3/files?q=${fq}&spaces=drive&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000`;
+    if(token)url+=`&pageToken=${encodeURIComponent(token)}`;
+    const rr=await driveApi(url); const data=await rr.json();
+    for(const f of (data.files||[])){
+      const prev=byName.get(f.name);
+      if(!prev || Number(f.size||0)>Number(prev.size||0))byName.set(f.name,f);
+    }
+    token=data.nextPageToken||'';
+  }while(token);
+  return byName;
+}
 async function uploadOneDrivePhoto(file){
   await ensureDriveFolder();
-  const metaResp=await driveApi('https://www.googleapis.com/drive/v3/files?fields=id,name',{
+  const boundary='kiiDiaryBoundary'+Math.random().toString(36).slice(2);
+  const meta=JSON.stringify({name:file.name,mimeType:file.type||'image/jpeg',parents:[driveFolderId]});
+  const body=new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n`,
+    `--${boundary}\r\nContent-Type: ${file.type||'application/octet-stream'}\r\n\r\n`,
+    file,
+    `\r\n--${boundary}--`
+  ],{type:`multipart/related; boundary=${boundary}`});
+  const r=await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size',{
     method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:file.name,mimeType:file.type||'image/jpeg',parents:[driveFolderId]})
+    headers:{'Content-Type':`multipart/related; boundary=${boundary}`},
+    body
   });
-  const meta=await metaResp.json();
-  await driveApi(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(meta.id)}?uploadType=media`,{
-    method:'PATCH',
-    headers:{'Content-Type':file.type||'application/octet-stream'},
-    body:file
-  });
-  return meta;
+  return await r.json();
+}
+async function uploadOneDrivePhotoWithRetry(file,maxAttempts=5){
+  let last;
+  for(let attempt=1;attempt<=maxAttempts;attempt++){
+    try{return await uploadOneDrivePhoto(file)}catch(e){
+      last=e;
+      if(attempt===maxAttempts)break;
+      await sleep(Math.min(15000,800*Math.pow(2,attempt-1)));
+    }
+  }
+  throw last;
+}
+async function waitIfPaused(){
+  while(driveUploadPaused && !driveUploadCancelled)await sleep(500);
 }
 async function uploadDrivePhotos(files){
-  if(!files?.length)return;
+  files=[...(files||[])].filter(f=>String(f.type||'').startsWith('image/') || /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(f.name));
+  if(!files.length)return;
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
-  let done=0,skipped=0;
+
+  const pauseBtn=document.getElementById('driveUploadPauseBtn');
+  const resumeBtn=document.getElementById('driveUploadResumeBtn');
+  pauseBtn.disabled=false; resumeBtn.disabled=true;
+  driveUploadPaused=false; driveUploadCancelled=false;
+  await requestDriveWakeLock();
+
+  let uploaded=0,skipped=0,failed=0,done=0;
+  const existing=await listDriveExistingFiles();
+  const candidates=[];
   for(const f of files){
-    if(!driveDateFromName(f.name)){skipped++;continue}
-    driveState(`Driveへ写真を保存中… ${done+1}/${files.length}`);
-    await uploadOneDrivePhoto(f);
-    done++;
+    if(!driveDateFromName(f.name)){skipped++;done++;continue}
+    const ex=existing.get(f.name);
+    if(ex && Number(ex.size||0)>0){skipped++;done++;continue}
+    candidates.push(f);
   }
-  driveState(`Driveへ ${done}枚保存しました${skipped?`（日付を読めず ${skipped}枚除外）`:''}`);
+  setDriveUploadProgress(done,files.length,uploaded,skipped,failed,'準備完了');
+
+  const queue=[...candidates];
+  const workers=Array.from({length:3},async()=>{
+    while(queue.length){
+      await waitIfPaused(); if(driveUploadCancelled)break;
+      const f=queue.shift(); if(!f)break;
+      try{
+        setDriveUploadProgress(done,files.length,uploaded,skipped,failed,`保存中：${f.name}`);
+        await uploadOneDrivePhotoWithRetry(f);
+        uploaded++;
+      }catch(e){
+        failed++; console.warn('Upload failed',f.name,e);
+      }
+      done++;
+      setDriveUploadProgress(done,files.length,uploaded,skipped,failed);
+    }
+  });
+  await Promise.all(workers);
+  await releaseDriveWakeLock();
+  pauseBtn.disabled=true; resumeBtn.disabled=true;
+  if(failed){
+    driveState(`Driveへ ${uploaded}枚保存・${skipped}枚スキップ・${failed}枚失敗。失敗分は同じフォルダをもう一度選べば再挑戦できます。`);
+  }else{
+    driveState(`Driveへ ${uploaded}枚保存しました（既存など ${skipped}枚スキップ）`);
+  }
   await loadDrivePhotoIndex();
 }
 async function driveBlobUrl(fileId){
@@ -314,7 +415,11 @@ window.addEventListener('DOMContentLoaded',()=>{initFirebase();
   document.getElementById('cloudDownloadBtn')?.addEventListener('click',()=>cloudDownload().catch(e=>alert(e.message)));
   document.getElementById('driveConnectBtn')?.addEventListener('click',()=>driveConnect().catch(e=>{driveState('Drive写真：接続できませんでした');alert(e.message)}));
   document.getElementById('driveRefreshBtn')?.addEventListener('click',()=>loadDrivePhotoIndex().catch(e=>alert(e.message)));
-  document.getElementById('drivePhotoUpload')?.addEventListener('change',e=>{const files=[...(e.target.files||[])];if(files.length)uploadDrivePhotos(files).catch(err=>{driveState('Drive写真：アップロードできませんでした');alert(err.message)});});
+  const startDriveBulk=e=>{const files=[...(e.target.files||[])];if(files.length)uploadDrivePhotos(files).catch(err=>{releaseDriveWakeLock();driveState('Drive写真：アップロードできませんでした');alert(err.message)});};
+  document.getElementById('drivePhotoUpload')?.addEventListener('change',startDriveBulk);
+  document.getElementById('drivePhotoFolderUpload')?.addEventListener('change',startDriveBulk);
+  document.getElementById('driveUploadPauseBtn')?.addEventListener('click',()=>{driveUploadPaused=true;document.getElementById('driveUploadPauseBtn').disabled=true;document.getElementById('driveUploadResumeBtn').disabled=false;driveState('Drive写真：一時停止中');});
+  document.getElementById('driveUploadResumeBtn')?.addEventListener('click',()=>{driveUploadPaused=false;document.getElementById('driveUploadPauseBtn').disabled=false;document.getElementById('driveUploadResumeBtn').disabled=true;driveState('Drive写真：再開しました');});
 });
 // ---- end Firebase sync ----
 
