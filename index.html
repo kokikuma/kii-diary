@@ -187,27 +187,34 @@ async function firebaseLogin(){
 let driveAccessToken=sessionStorage.getItem('kiiDriveAccessToken')||'';
 let driveFolderId='';
 let drivePhotosByDate=new Map();
-const driveBlobUrlCache=new Map();
+const driveBlobUrlCache=new Map(); // fileId -> Blob URL (LRU, bounded for iPhone memory)
+const DRIVE_BLOB_CACHE_MAX=80;
 let driveImageObserver=null;
 const DRIVE_FOLDER_NAME='kii-diary-photos-app';
+class DriveAuthExpiredError extends Error{constructor(message='Driveの接続期限が切れました'){super(message);this.name='DriveAuthExpiredError'}}
 
 function driveState(msg){const el=document.getElementById('driveState');if(el)el.textContent=msg}
 function driveDateFromName(name){
   const m=String(name||'').match(/(\d{4})[._-]?(\d{2})[._-]?(\d{2})/);
   return m?`${m[1]}-${m[2]}-${m[3]}`:null;
 }
-async function driveConnect(){
+async function driveConnect({refreshIndex=true,forceConsent=false}={}){
   if(!fbFns)throw new Error('Google接続の準備ができていません');
   driveState('Driveへの接続を確認中…');
   const provider=new fbFns.GoogleAuthProvider();
   provider.addScope('https://www.googleapis.com/auth/drive.file');
-  provider.setCustomParameters({prompt:'consent'});
+  // 初回だけ同意画面。期限切れ時は既に許可済みなので、毎回の再同意を避ける。
+  provider.setCustomParameters({prompt:forceConsent?'consent':'select_account'});
   const result=await fbFns.signInWithPopup(fbAuth,provider);
   const credential=fbFns.GoogleAuthProvider.credentialFromResult(result);
   if(!credential?.accessToken)throw new Error('Google Drive用の認証情報を取得できませんでした');
   driveAccessToken=credential.accessToken;
   sessionStorage.setItem('kiiDriveAccessToken',driveAccessToken);
-  await loadDrivePhotoIndex();
+  if(refreshIndex)await loadDrivePhotoIndex();
+  else{
+    driveState(`Drive写真：接続を更新しました（${[...drivePhotosByDate.values()].reduce((n,a)=>n+a.length,0)}枚を認識済み）`);
+    observeDriveImages();
+  }
 }
 async function driveApi(url,options={}){
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
@@ -216,7 +223,12 @@ async function driveApi(url,options={}){
   const r=await fetch(url,{...options,headers});
   if(!r.ok){
     let detail='';try{const j=await r.json();detail=j?.error?.message||''}catch{}
-    if(r.status===401){sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';throw new Error('Driveの接続期限が切れました。もう一度「Drive写真を接続」を押してね');}
+    if(r.status===401){
+      sessionStorage.removeItem('kiiDriveAccessToken');
+      driveAccessToken='';
+      driveState('Drive写真：接続期限が切れました（写真をタップすると再接続できます）');
+      throw new DriveAuthExpiredError();
+    }
     if(r.status===403)throw new Error('Google Drive APIを使える設定になっていない可能性があります。'+(detail?`（${detail}）`:'') );
     throw new Error(`Driveエラー ${r.status}${detail?`：${detail}`:''}`);
   }
@@ -375,22 +387,61 @@ async function uploadDrivePhotos(files){
   }
   await loadDrivePhotoIndex();
 }
+function cachedDriveBlobUrl(fileId){
+  if(!driveBlobUrlCache.has(fileId))return '';
+  const u=driveBlobUrlCache.get(fileId);
+  // Mapの末尾へ移してLRU化
+  driveBlobUrlCache.delete(fileId); driveBlobUrlCache.set(fileId,u);
+  return u;
+}
+function putDriveBlobUrl(fileId,u){
+  if(driveBlobUrlCache.has(fileId)){
+    const old=driveBlobUrlCache.get(fileId);
+    if(old!==u)try{URL.revokeObjectURL(old)}catch{}
+    driveBlobUrlCache.delete(fileId);
+  }
+  driveBlobUrlCache.set(fileId,u);
+  while(driveBlobUrlCache.size>DRIVE_BLOB_CACHE_MAX){
+    const [oldId,oldUrl]=driveBlobUrlCache.entries().next().value;
+    driveBlobUrlCache.delete(oldId);
+    try{URL.revokeObjectURL(oldUrl)}catch{}
+  }
+}
 async function driveBlobUrl(fileId){
-  if(driveBlobUrlCache.has(fileId))return driveBlobUrlCache.get(fileId);
+  const cached=cachedDriveBlobUrl(fileId); if(cached)return cached;
   const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
-  const blob=await r.blob(); const u=URL.createObjectURL(blob); driveBlobUrlCache.set(fileId,u); return u;
+  const blob=await r.blob(); const u=URL.createObjectURL(blob); putDriveBlobUrl(fileId,u); return u;
+}
+async function driveBlobUrlFromUserAction(fileId){
+  try{return await driveBlobUrl(fileId)}
+  catch(err){
+    if(!(err instanceof DriveAuthExpiredError))throw err;
+    // 写真タップというユーザー操作中ならポップアップ再認証が許されやすい。
+    await driveConnect({refreshIndex:false,forceConsent:false});
+    return await driveBlobUrl(fileId);
+  }
 }
 function observeDriveImages(){
   if(driveImageObserver)driveImageObserver.disconnect();
   driveImageObserver=new IntersectionObserver(entries=>{
     entries.forEach(async ent=>{
       if(!ent.isIntersecting)return; const img=ent.target; driveImageObserver.unobserve(img);
-      try{img.src=await driveBlobUrl(img.dataset.driveId)}catch(err){img.alt='Drive写真を読み込めません';console.warn(err)}
+      try{img.src=await driveBlobUrl(img.dataset.driveId)}catch(err){
+        if(err instanceof DriveAuthExpiredError){img.alt='写真をタップすると再接続します'}
+        else img.alt='Drive写真を読み込めません';
+        console.warn(err)
+      }
     });
   },{rootMargin:'500px 0px'});
   document.querySelectorAll('img[data-drive-id]').forEach(img=>driveImageObserver.observe(img));
 }
-async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）')}
+async function firebaseLogout(){
+  if(fbAuth)await fbFns.signOut(fbAuth);
+  sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();
+  for(const u of driveBlobUrlCache.values())try{URL.revokeObjectURL(u)}catch{}
+  driveBlobUrlCache.clear();
+  driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）')
+}
 function cloudEntry(e){
   const {id,date,time,text,source,tags,favorite,place,lat,lng,url}=e;
   return {id,date:date||'',time:time||'',text:text||'',source:source||'Manual',tags:Array.isArray(tags)?tags:[],favorite:!!favorite,place:place||'',lat:lat??null,lng:lng??null,url:url||'',updatedAt:Date.now()};
@@ -622,7 +673,16 @@ photoViewer?.addEventListener('touchmove',e=>{
 photoViewer?.addEventListener('touchend',e=>{if(e.touches.length<2)viewerStartDist=0},{passive:false});
 
 $('#timeline').addEventListener('click',async ev=>{
-  const heroTap=ev.target.closest('.hero-image'); if(heroTap){openPhotoViewer(heroTap.src);return}
+  const heroTap=ev.target.closest('.hero-image'); if(heroTap){
+    try{
+      let src=heroTap.src;
+      if(heroTap.dataset.driveId && (!src || src.startsWith('data:image/svg+xml'))){
+        src=await driveBlobUrlFromUserAction(heroTap.dataset.driveId); heroTap.src=src;
+      }
+      openPhotoViewer(src);
+    }catch(err){alert(err.message||String(err))}
+    return
+  }
   const fav=ev.target.closest('.fav-entry'); if(fav){const e=await get('entries',fav.dataset.id); if(e){e.favorite=!e.favorite;await put('entries',e);await render()}return}
   const edit=ev.target.closest('.edit-entry'); if(edit){await openEditEntry(edit.dataset.id);return}
   const delBtn=ev.target.closest('.delete-inline'); if(delBtn){await deleteEntryById(delBtn.dataset.id);return}
@@ -630,7 +690,15 @@ $('#timeline').addEventListener('click',async ev=>{
   const thumb=ev.target.closest('.photo-strip img'); if(thumb){
     const moment=thumb.closest('.moment'), hero=moment.querySelector('.hero-image');
     if(hero){
-      if(thumb.dataset.fullDriveId){try{hero.src=await driveBlobUrl(thumb.dataset.fullDriveId)}catch(err){alert(err.message);return}}
+      if(thumb.dataset.fullDriveId){
+        try{
+          // サムネイルが既にBlobならDriveへ再アクセスしない。未読込時だけ取得する。
+          const src=(thumb.src&&thumb.src.startsWith('blob:'))?thumb.src:await driveBlobUrlFromUserAction(thumb.dataset.fullDriveId);
+          hero.src=src;
+          if(thumb.src!==src)thumb.src=src;
+          hero.dataset.driveId=thumb.dataset.fullDriveId;
+        }catch(err){alert(err.message||String(err));return}
+      }
       else hero.src=thumb.dataset.full||thumb.src;
     }
     moment.querySelectorAll('.photo-strip img').forEach(i=>i.classList.toggle('active',i===thumb));
