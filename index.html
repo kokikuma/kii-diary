@@ -226,7 +226,7 @@ async function driveApi(url,options={}){
     if(r.status===401){
       sessionStorage.removeItem('kiiDriveAccessToken');
       driveAccessToken='';
-      driveState('Drive写真：接続期限が切れました（写真をタップすると再接続できます）');
+      driveState('Drive写真：再認証待ち（写真をタップすれば続けられます）');
       throw new DriveAuthExpiredError();
     }
     if(r.status===403)throw new Error('Google Drive APIを使える設定になっていない可能性があります。'+(detail?`（${detail}）`:'') );
@@ -402,9 +402,9 @@ function putDriveBlobUrl(fileId,u){
   }
   driveBlobUrlCache.set(fileId,u);
   while(driveBlobUrlCache.size>DRIVE_BLOB_CACHE_MAX){
-    const [oldId,oldUrl]=driveBlobUrlCache.entries().next().value;
-    driveBlobUrlCache.delete(oldId);
-    try{URL.revokeObjectURL(oldUrl)}catch{}
+    const [oldId]=driveBlobUrlCache.entries().next().value;
+    // 表示中の画像が突然消えないよう、URL自体はここではrevokeしない。
+    driveBlobUrlCache.delete(oldId)
   }
 }
 async function driveBlobUrl(fileId){
@@ -412,12 +412,22 @@ async function driveBlobUrl(fileId){
   const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
   const blob=await r.blob(); const u=URL.createObjectURL(blob); putDriveBlobUrl(fileId,u); return u;
 }
+let driveReconnectPromise=null;
+async function reconnectDriveFromUserAction(){
+  // 背景の遅延読込で期限切れを検知した後でも、写真タップならここで復旧する。
+  if(driveReconnectPromise)return driveReconnectPromise;
+  driveReconnectPromise=driveConnect({refreshIndex:false,forceConsent:false});
+  try{await driveReconnectPromise}finally{driveReconnectPromise=null}
+}
 async function driveBlobUrlFromUserAction(fileId){
+  // すでにキャッシュ済みならDriveへアクセスしない。
+  const cached=cachedDriveBlobUrl(fileId); if(cached)return cached;
+  // 遅延読込側が先に401を受けてトークンを空にしていても、タップ時に復旧する。
+  if(!driveAccessToken)await reconnectDriveFromUserAction();
   try{return await driveBlobUrl(fileId)}
   catch(err){
     if(!(err instanceof DriveAuthExpiredError))throw err;
-    // 写真タップというユーザー操作中ならポップアップ再認証が許されやすい。
-    await driveConnect({refreshIndex:false,forceConsent:false});
+    await reconnectDriveFromUserAction();
     return await driveBlobUrl(fileId);
   }
 }
