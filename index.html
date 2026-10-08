@@ -54,7 +54,11 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
           <button id="driveConnectBtn" type="button">Drive写真を接続</button>
           <button id="driveRefreshBtn" type="button">Drive写真を再読込</button>
         </div>
-        <div id="driveState" style="margin-top:7px;color:#888">Drive写真：未接続（kii-diary-photos を読み込みます）</div>
+        <label style="display:block;margin-top:10px;padding:10px;border:1px dashed #c6bdb4;border-radius:9px;background:#fff">
+          Facebook写真をDriveへ（テスト）
+          <input id="drivePhotoUpload" type="file" accept="image/*" multiple style="margin-top:7px;padding:0;border:0" />
+        </label>
+        <div id="driveState" style="margin-top:7px;color:#888">Drive写真：未接続（このアプリ専用の写真だけ扱います）</div>
       </div>
     </details>
     <details>
@@ -153,23 +157,24 @@ async function firebaseLogin(){
   await fbFns.signInWithPopup(fbAuth,provider);
 }
 
-// ---- Google Drive photo test ----
+// ---- Google Drive photo test (least-privilege: drive.file only) ----
 let driveAccessToken=sessionStorage.getItem('kiiDriveAccessToken')||'';
 let driveFolderId='';
 let drivePhotosByDate=new Map();
 const driveBlobUrlCache=new Map();
 let driveImageObserver=null;
+const DRIVE_FOLDER_NAME='kii-diary-photos-app';
 
 function driveState(msg){const el=document.getElementById('driveState');if(el)el.textContent=msg}
 function driveDateFromName(name){
-  const m=String(name||'').match(/^(\d{4})(\d{2})(\d{2})(?:[_-]|\.)/);
-  if(!m)return null; return `${m[1]}-${m[2]}-${m[3]}`;
+  const m=String(name||'').match(/(\d{4})[._-]?(\d{2})[._-]?(\d{2})/);
+  return m?`${m[1]}-${m[2]}-${m[3]}`:null;
 }
 async function driveConnect(){
-  if(!firebaseReady){await initFirebase(); if(!firebaseReady)return;}
+  if(!fbFns)throw new Error('Google接続の準備ができていません');
   driveState('Driveへの接続を確認中…');
   const provider=new fbFns.GoogleAuthProvider();
-  provider.addScope('https://www.googleapis.com/auth/drive.readonly');
+  provider.addScope('https://www.googleapis.com/auth/drive.file');
   provider.setCustomParameters({prompt:'consent'});
   const result=await fbFns.signInWithPopup(fbAuth,provider);
   const credential=fbFns.GoogleAuthProvider.credentialFromResult(result);
@@ -178,24 +183,38 @@ async function driveConnect(){
   sessionStorage.setItem('kiiDriveAccessToken',driveAccessToken);
   await loadDrivePhotoIndex();
 }
-async function driveApi(url){
+async function driveApi(url,options={}){
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
-  const r=await fetch(url,{headers:{Authorization:`Bearer ${driveAccessToken}`}});
+  const headers=new Headers(options.headers||{});
+  headers.set('Authorization',`Bearer ${driveAccessToken}`);
+  const r=await fetch(url,{...options,headers});
   if(!r.ok){
-    let detail=''; try{detail=(await r.json())?.error?.message||''}catch{}
+    let detail='';try{const j=await r.json();detail=j?.error?.message||''}catch{}
     if(r.status===401){sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';throw new Error('Driveの接続期限が切れました。もう一度「Drive写真を接続」を押してね');}
-    if(r.status===403)throw new Error('Google Drive APIを使える設定になっていない可能性があります。'+(detail?`（${detail}）`:''));
+    if(r.status===403)throw new Error('Google Drive APIを使える設定になっていない可能性があります。'+(detail?`（${detail}）`:'') );
     throw new Error(`Driveエラー ${r.status}${detail?`：${detail}`:''}`);
   }
   return r;
 }
+async function ensureDriveFolder(){
+  if(driveFolderId)return driveFolderId;
+  // drive.file では、このアプリ自身が作成した/許可されたファイルだけが見えます。
+  const q=encodeURIComponent(`name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=10`);
+  const data=await r.json();
+  if(data.files?.length){driveFolderId=data.files[0].id;return driveFolderId}
+  const created=await driveApi('https://www.googleapis.com/drive/v3/files?fields=id,name',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:DRIVE_FOLDER_NAME,mimeType:'application/vnd.google-apps.folder'})
+  });
+  const folder=await created.json();
+  driveFolderId=folder.id;
+  return driveFolderId;
+}
 async function loadDrivePhotoIndex(){
-  driveState('kii-diary-photos を探しています…');
-  const q=encodeURIComponent("name='kii-diary-photos' and mimeType='application/vnd.google-apps.folder' and trashed=false");
-  const folderRes=await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=20`);
-  const folderData=await folderRes.json();
-  if(!folderData.files?.length)throw new Error('マイドライブに kii-diary-photos フォルダが見つかりません');
-  driveFolderId=folderData.files[0].id;
+  driveState('日記専用のDrive写真を確認中…');
+  await ensureDriveFolder();
   const map=new Map(); let token='',count=0;
   do{
     const fq=encodeURIComponent(`'${driveFolderId}' in parents and trashed=false`);
@@ -211,8 +230,36 @@ async function loadDrivePhotoIndex(){
   }while(token);
   for(const arr of map.values())arr.sort((a,b)=>a.name.localeCompare(b.name));
   drivePhotosByDate=map;
-  driveState(`Drive写真：${count}枚を認識しました`);
+  driveState(`Drive写真：${count}枚を認識しました（アプリ専用）`);
   await render();
+}
+async function uploadOneDrivePhoto(file){
+  await ensureDriveFolder();
+  const metaResp=await driveApi('https://www.googleapis.com/drive/v3/files?fields=id,name',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:file.name,mimeType:file.type||'image/jpeg',parents:[driveFolderId]})
+  });
+  const meta=await metaResp.json();
+  await driveApi(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(meta.id)}?uploadType=media`,{
+    method:'PATCH',
+    headers:{'Content-Type':file.type||'application/octet-stream'},
+    body:file
+  });
+  return meta;
+}
+async function uploadDrivePhotos(files){
+  if(!files?.length)return;
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  let done=0,skipped=0;
+  for(const f of files){
+    if(!driveDateFromName(f.name)){skipped++;continue}
+    driveState(`Driveへ写真を保存中… ${done+1}/${files.length}`);
+    await uploadOneDrivePhoto(f);
+    done++;
+  }
+  driveState(`Driveへ ${done}枚保存しました${skipped?`（日付を読めず ${skipped}枚除外）`:''}`);
+  await loadDrivePhotoIndex();
 }
 async function driveBlobUrl(fileId){
   if(driveBlobUrlCache.has(fileId))return driveBlobUrlCache.get(fileId);
@@ -229,7 +276,7 @@ function observeDriveImages(){
   },{rootMargin:'500px 0px'});
   document.querySelectorAll('img[data-drive-id]').forEach(img=>driveImageObserver.observe(img));
 }
-async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();driveState('Drive写真：未接続')}
+async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）')}
 function cloudEntry(e){
   const {id,date,time,text,source,tags,favorite,place,lat,lng,url}=e;
   return {id,date:date||'',time:time||'',text:text||'',source:source||'Manual',tags:Array.isArray(tags)?tags:[],favorite:!!favorite,place:place||'',lat:lat??null,lng:lng??null,url:url||'',updatedAt:Date.now()};
@@ -267,6 +314,7 @@ window.addEventListener('DOMContentLoaded',()=>{initFirebase();
   document.getElementById('cloudDownloadBtn')?.addEventListener('click',()=>cloudDownload().catch(e=>alert(e.message)));
   document.getElementById('driveConnectBtn')?.addEventListener('click',()=>driveConnect().catch(e=>{driveState('Drive写真：接続できませんでした');alert(e.message)}));
   document.getElementById('driveRefreshBtn')?.addEventListener('click',()=>loadDrivePhotoIndex().catch(e=>alert(e.message)));
+  document.getElementById('drivePhotoUpload')?.addEventListener('change',e=>{const files=[...(e.target.files||[])];if(files.length)uploadDrivePhotos(files).catch(err=>{driveState('Drive写真：アップロードできませんでした');alert(err.message)});});
 });
 // ---- end Firebase sync ----
 
