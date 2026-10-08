@@ -32,7 +32,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:10px;font-weight:600;opacity:.75">prefetch-test</span></div>
+  <div class="app-title">Days</div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -188,7 +188,6 @@ let driveAccessToken=sessionStorage.getItem('kiiDriveAccessToken')||'';
 let driveFolderId='';
 let drivePhotosByDate=new Map();
 const driveBlobUrlCache=new Map();
-const driveBlobPromiseCache=new Map();
 let driveImageObserver=null;
 const DRIVE_FOLDER_NAME='kii-diary-photos-app';
 
@@ -378,38 +377,17 @@ async function uploadDrivePhotos(files){
 }
 async function driveBlobUrl(fileId){
   if(driveBlobUrlCache.has(fileId))return driveBlobUrlCache.get(fileId);
-  if(driveBlobPromiseCache.has(fileId))return driveBlobPromiseCache.get(fileId);
-  const p=(async()=>{
-    const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
-    const blob=await r.blob();
-    const u=URL.createObjectURL(blob);
-    driveBlobUrlCache.set(fileId,u);
-    return u;
-  })();
-  driveBlobPromiseCache.set(fileId,p);
-  try{return await p}finally{driveBlobPromiseCache.delete(fileId)}
-}
-async function prefetchMomentDrivePhotos(img){
-  const moment=img.closest('.moment'); if(!moment)return;
-  const others=[...moment.querySelectorAll('.photo-strip img[data-full-drive-id]')].filter(x=>x.dataset.fullDriveId!==img.dataset.driveId);
-  for(let i=0;i<others.length;i++){
-    await new Promise(r=>setTimeout(r,i===0?3000:1500));
-    const t=others[i]; const id=t.dataset.fullDriveId;
-    if(!id||driveBlobUrlCache.has(id))continue;
-    try{const u=await driveBlobUrl(id); t.src=u;}catch(err){console.warn('prefetch skipped',err);break;}
-  }
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
+  const blob=await r.blob(); const u=URL.createObjectURL(blob); driveBlobUrlCache.set(fileId,u); return u;
 }
 function observeDriveImages(){
   if(driveImageObserver)driveImageObserver.disconnect();
   driveImageObserver=new IntersectionObserver(entries=>{
     entries.forEach(async ent=>{
       if(!ent.isIntersecting)return; const img=ent.target; driveImageObserver.unobserve(img);
-      try{
-        img.src=await driveBlobUrl(img.dataset.driveId);
-        if(img.classList.contains('hero-image'))prefetchMomentDrivePhotos(img);
-      }catch(err){img.alt='Drive写真を読み込めません';console.warn(err)}
+      try{img.src=await driveBlobUrl(img.dataset.driveId)}catch(err){img.alt='Drive写真を読み込めません';console.warn(err)}
     });
-  },{rootMargin:'250px 0px'});
+  },{rootMargin:'500px 0px'});
   document.querySelectorAll('img[data-drive-id]').forEach(img=>driveImageObserver.observe(img));
 }
 async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）')}
