@@ -49,7 +49,12 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
           <button id="cloudDownloadBtn" type="button">Google → この端末</button>
           <button id="googleLogoutBtn" type="button">ログアウト</button>
         </div>
-        <div style="margin-top:7px;color:#888">まずは本文・日付・タグ・お気に入り・場所だけ同期します。写真は次段階で追加します。</div>
+        <div style="margin-top:7px;color:#888">本文・日付・タグ・お気に入り・場所はFirebaseに同期します。</div>
+        <div class="actions" style="flex-wrap:wrap;margin-top:8px">
+          <button id="driveConnectBtn" type="button">Drive写真を接続</button>
+          <button id="driveRefreshBtn" type="button">Drive写真を再読込</button>
+        </div>
+        <div id="driveState" style="margin-top:7px;color:#888">Drive写真：未接続（kii-diary-photos を読み込みます）</div>
       </div>
     </details>
     <details>
@@ -147,7 +152,84 @@ async function firebaseLogin(){
   const provider=new fbFns.GoogleAuthProvider();
   await fbFns.signInWithPopup(fbAuth,provider);
 }
-async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth)}
+
+// ---- Google Drive photo test ----
+let driveAccessToken=sessionStorage.getItem('kiiDriveAccessToken')||'';
+let driveFolderId='';
+let drivePhotosByDate=new Map();
+const driveBlobUrlCache=new Map();
+let driveImageObserver=null;
+
+function driveState(msg){const el=document.getElementById('driveState');if(el)el.textContent=msg}
+function driveDateFromName(name){
+  const m=String(name||'').match(/^(\d{4})(\d{2})(\d{2})(?:[_-]|\.)/);
+  if(!m)return null; return `${m[1]}-${m[2]}-${m[3]}`;
+}
+async function driveConnect(){
+  if(!firebaseReady){await initFirebase(); if(!firebaseReady)return;}
+  driveState('Driveへの接続を確認中…');
+  const provider=new fbFns.GoogleAuthProvider();
+  provider.addScope('https://www.googleapis.com/auth/drive.readonly');
+  provider.setCustomParameters({prompt:'consent'});
+  const result=await fbFns.signInWithPopup(fbAuth,provider);
+  const credential=fbFns.GoogleAuthProvider.credentialFromResult(result);
+  if(!credential?.accessToken)throw new Error('Google Drive用の認証情報を取得できませんでした');
+  driveAccessToken=credential.accessToken;
+  sessionStorage.setItem('kiiDriveAccessToken',driveAccessToken);
+  await loadDrivePhotoIndex();
+}
+async function driveApi(url){
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  const r=await fetch(url,{headers:{Authorization:`Bearer ${driveAccessToken}`}});
+  if(!r.ok){
+    let detail=''; try{detail=(await r.json())?.error?.message||''}catch{}
+    if(r.status===401){sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';throw new Error('Driveの接続期限が切れました。もう一度「Drive写真を接続」を押してね');}
+    if(r.status===403)throw new Error('Google Drive APIを使える設定になっていない可能性があります。'+(detail?`（${detail}）`:''));
+    throw new Error(`Driveエラー ${r.status}${detail?`：${detail}`:''}`);
+  }
+  return r;
+}
+async function loadDrivePhotoIndex(){
+  driveState('kii-diary-photos を探しています…');
+  const q=encodeURIComponent("name='kii-diary-photos' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+  const folderRes=await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=20`);
+  const folderData=await folderRes.json();
+  if(!folderData.files?.length)throw new Error('マイドライブに kii-diary-photos フォルダが見つかりません');
+  driveFolderId=folderData.files[0].id;
+  const map=new Map(); let token='',count=0;
+  do{
+    const fq=encodeURIComponent(`'${driveFolderId}' in parents and trashed=false`);
+    let url=`https://www.googleapis.com/drive/v3/files?q=${fq}&spaces=drive&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name`;
+    if(token)url+=`&pageToken=${encodeURIComponent(token)}`;
+    const rr=await driveApi(url); const data=await rr.json();
+    for(const f of (data.files||[])){
+      if(!String(f.mimeType||'').startsWith('image/'))continue;
+      const d=driveDateFromName(f.name); if(!d)continue;
+      if(!map.has(d))map.set(d,[]); map.get(d).push(f); count++;
+    }
+    token=data.nextPageToken||'';
+  }while(token);
+  for(const arr of map.values())arr.sort((a,b)=>a.name.localeCompare(b.name));
+  drivePhotosByDate=map;
+  driveState(`Drive写真：${count}枚を認識しました`);
+  await render();
+}
+async function driveBlobUrl(fileId){
+  if(driveBlobUrlCache.has(fileId))return driveBlobUrlCache.get(fileId);
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
+  const blob=await r.blob(); const u=URL.createObjectURL(blob); driveBlobUrlCache.set(fileId,u); return u;
+}
+function observeDriveImages(){
+  if(driveImageObserver)driveImageObserver.disconnect();
+  driveImageObserver=new IntersectionObserver(entries=>{
+    entries.forEach(async ent=>{
+      if(!ent.isIntersecting)return; const img=ent.target; driveImageObserver.unobserve(img);
+      try{img.src=await driveBlobUrl(img.dataset.driveId)}catch(err){img.alt='Drive写真を読み込めません';console.warn(err)}
+    });
+  },{rootMargin:'500px 0px'});
+  document.querySelectorAll('img[data-drive-id]').forEach(img=>driveImageObserver.observe(img));
+}
+async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();driveState('Drive写真：未接続')}
 function cloudEntry(e){
   const {id,date,time,text,source,tags,favorite,place,lat,lng,url}=e;
   return {id,date:date||'',time:time||'',text:text||'',source:source||'Manual',tags:Array.isArray(tags)?tags:[],favorite:!!favorite,place:place||'',lat:lat??null,lng:lng??null,url:url||'',updatedAt:Date.now()};
@@ -183,6 +265,8 @@ window.addEventListener('DOMContentLoaded',()=>{initFirebase();
   document.getElementById('googleLogoutBtn')?.addEventListener('click',()=>firebaseLogout().catch(e=>alert(e.message)));
   document.getElementById('cloudUploadBtn')?.addEventListener('click',()=>cloudUpload().catch(e=>alert(e.message)));
   document.getElementById('cloudDownloadBtn')?.addEventListener('click',()=>cloudDownload().catch(e=>alert(e.message)));
+  document.getElementById('driveConnectBtn')?.addEventListener('click',()=>driveConnect().catch(e=>{driveState('Drive写真：接続できませんでした');alert(e.message)}));
+  document.getElementById('driveRefreshBtn')?.addEventListener('click',()=>loadDrivePhotoIndex().catch(e=>alert(e.message)));
 });
 // ---- end Firebase sync ----
 
@@ -246,18 +330,26 @@ async function render(){
     for(const e of es){
       const card=document.createElement('article'); card.className='moment'; card.dataset.id=e.id;
       const medias=[]; for(const mid of (e.mediaIds||[])){const m=await get('media',mid); if(m)medias.push(m)}
-      let hero=''; if(medias.length){const url=URL.createObjectURL(medias[0].blob);hero=`<div class="hero"><img class="hero-image" src="${url}" alt=""><span class="hero-count">📷 ${medias.length}</span></div>`}
-      const thumbs=medias.length>1?`<div class="photo-strip">${medias.map((m,i)=>{const u=URL.createObjectURL(m.blob);return `<img class="${i===0?'active':''}" data-full="${u}" src="${u}" alt="">`}).join('')}</div>`:'';
+      const driveMedias=(e.source==='Facebook'?(drivePhotosByDate.get(e.date)||[]):[]);
+      const totalMedia=medias.length+driveMedias.length;
+      let hero='';
+      if(medias.length){const url=URL.createObjectURL(medias[0].blob);hero=`<div class="hero"><img class="hero-image" src="${url}" alt=""><span class="hero-count">📷 ${totalMedia}</span></div>`}
+      else if(driveMedias.length){const f=driveMedias[0];hero=`<div class="hero"><img class="hero-image" data-drive-id="${esc(f.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='900'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}"><span class="hero-count">📷 ${totalMedia}</span></div>`}
+      const thumbItems=[];
+      medias.forEach((m,i)=>{const u=URL.createObjectURL(m.blob);thumbItems.push(`<img class="${i===0?'active':''}" data-full="${u}" src="${u}" alt="">`)});
+      driveMedias.forEach((f,i)=>{const active=!medias.length&&i===0?'active':'';thumbItems.push(`<img class="${active}" data-drive-id="${esc(f.id)}" data-full-drive-id="${esc(f.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}">`)});
+      const thumbs=totalMedia>1?`<div class="photo-strip">${thumbItems.join('')}</div>`:'';
       const text=e.text?`<div class="moment-text">${esc(e.text)}</div>`:'';
       const shownPlace=cleanPlace(e.place), place=shownPlace?`<div class="place">📍 ${esc(shownPlace)}</div>`:'';
       const tags=allTags(e), tagHtml=tags.length?`<div class="tag-row">${tags.map(t=>`<button class="tag-chip" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>`:'';
       const sourceLabel=e.source==='Manual'?'日記':e.source;
-      const meta=`<div class="moment-meta"><span class="source">${esc(sourceLabel)}</span>${e.time?`<span>🕘 ${esc(e.time)}</span>`:''}${medias.length?`<span>▧ ${medias.length}</span>`:''}<button class="fav-entry ${e.favorite?'on':''}" data-id="${e.id}" title="お気に入り">${e.favorite?'★':'☆'}</button><details class="entry-menu"><summary class="menu-summary" title="メニュー">⋯</summary><div class="menu-pop"><button class="edit-entry" data-id="${e.id}">編集</button><button class="delete-inline" data-id="${e.id}">削除</button></div></details></div>`;
+      const meta=`<div class="moment-meta"><span class="source">${esc(sourceLabel)}</span>${e.time?`<span>🕘 ${esc(e.time)}</span>`:''}${totalMedia?`<span>▧ ${totalMedia}</span>`:''}<button class="fav-entry ${e.favorite?'on':''}" data-id="${e.id}" title="お気に入り">${e.favorite?'★':'☆'}</button><details class="entry-menu"><summary class="menu-summary" title="メニュー">⋯</summary><div class="menu-pop"><button class="edit-entry" data-id="${e.id}">編集</button><button class="delete-inline" data-id="${e.id}">削除</button></div></details></div>`;
       // 写真がある時は写真を先に、その後に本文
       card.innerHTML=hero+thumbs+text+place+tagHtml+meta; sec.appendChild(card);
     }
     root.appendChild(sec);
   }
+  if(driveAccessToken && drivePhotosByDate.size)observeDriveImages();
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
 
@@ -321,7 +413,11 @@ $('#timeline').addEventListener('click',async ev=>{
   const delBtn=ev.target.closest('.delete-inline'); if(delBtn){await deleteEntryById(delBtn.dataset.id);return}
   const tag=ev.target.closest('.tag-chip'); if(tag){$('#controlPanel').classList.remove('hidden');$('#tagFilter').value=tag.dataset.tag;await render();return}
   const thumb=ev.target.closest('.photo-strip img'); if(thumb){
-    const moment=thumb.closest('.moment'), hero=moment.querySelector('.hero-image'); if(hero)hero.src=thumb.dataset.full||thumb.src;
+    const moment=thumb.closest('.moment'), hero=moment.querySelector('.hero-image');
+    if(hero){
+      if(thumb.dataset.fullDriveId){try{hero.src=await driveBlobUrl(thumb.dataset.fullDriveId)}catch(err){alert(err.message);return}}
+      else hero.src=thumb.dataset.full||thumb.src;
+    }
     moment.querySelectorAll('.photo-strip img').forEach(i=>i.classList.toggle('active',i===thumb));
   }
 });
