@@ -85,6 +85,18 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
         <label>Facebook写真<input id="facebookPhotos" type="file" accept="image/*" multiple /></label>
       </div>
       <div id="momentoAttachmentCheckResult" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px solid #d8d0c8;border-radius:9px;background:#fff;font-size:12px;line-height:1.65;color:#5b554f"></div>
+      <div id="momentoDriveUploadPanel" class="hidden" style="margin-top:10px;background:#fff;border:1px solid #d8d0c8;border-radius:10px;padding:12px;font-size:12px;line-height:1.7">
+        <div style="font-weight:800;font-size:13px">Momento写真をGoogle Driveへ</div>
+        <div style="color:#777;margin-top:3px">照合で見つかった必要ファイルだけを、Momento専用フォルダへ保存します。既存ファイルは自動スキップします。</div>
+        <div class="actions" style="flex-wrap:wrap">
+          <button id="momentoDriveUploadBtn" type="button">必要ファイルをアップロード</button>
+          <button id="momentoDrivePauseBtn" type="button" disabled>一時停止</button>
+          <button id="momentoDriveResumeBtn" type="button" disabled>再開</button>
+        </div>
+        <div id="momentoDriveUploadProgress" style="margin-top:8px;color:#666">待機中</div>
+        <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px"><div id="momentoDriveUploadBar" style="height:100%;width:0%;background:#56C3F0"></div></div>
+        <div id="momentoDriveState" style="margin-top:7px;color:#888">Momento写真：未確認</div>
+      </div>
       <div class="actions"><button id="exportBtn">バックアップを書き出す</button><button id="clearBtn" class="danger">試作データを全削除</button></div>
       <p id="status" class="status"></p>
     </details>
@@ -200,6 +212,7 @@ async function driveConnect(){
   driveAccessToken=credential.accessToken;
   sessionStorage.setItem('kiiDriveAccessToken',driveAccessToken);
   await loadDrivePhotoIndex();
+  try{await loadMomentoDriveIndex()}catch(e){console.warn(e)}
 }
 async function driveApi(url,options={}){
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
@@ -382,6 +395,81 @@ function observeDriveImages(){
   },{rootMargin:'500px 0px'});
   document.querySelectorAll('img[data-drive-id]').forEach(img=>driveImageObserver.observe(img));
 }
+
+// ---- Momento Drive media (drive.file / app-created folder only) ----
+const MOMENTO_DRIVE_FOLDER_NAME='kii-diary-momento-media-app';
+let momentoDriveFolderId='';
+let momentoDriveFilesByName=new Map();
+let momentoUploadPaused=false;
+let momentoUploadWakeLock=null;
+function momentoDriveState(msg){const el=document.getElementById('momentoDriveState');if(el)el.textContent=msg}
+function setMomentoUploadProgress(done,total,uploaded,skipped,failed,current=''){
+  const p=document.getElementById('momentoDriveUploadProgress'), b=document.getElementById('momentoDriveUploadBar');
+  const pct=total?Math.round(done/total*100):0; if(b)b.style.width=`${pct}%`;
+  if(p)p.textContent=total?`${done} / ${total}（保存 ${uploaded}・既存 ${skipped}・失敗 ${failed}）${current?`  ${current}`:''}`:'待機中';
+}
+async function ensureMomentoDriveFolder(){
+  if(momentoDriveFolderId)return momentoDriveFolderId;
+  const q=encodeURIComponent(`name='${MOMENTO_DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=10`);
+  const data=await r.json();
+  if(data.files?.length){momentoDriveFolderId=data.files[0].id;return momentoDriveFolderId}
+  const created=await driveApi('https://www.googleapis.com/drive/v3/files?fields=id,name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:MOMENTO_DRIVE_FOLDER_NAME,mimeType:'application/vnd.google-apps.folder'})});
+  const folder=await created.json(); momentoDriveFolderId=folder.id; return momentoDriveFolderId;
+}
+async function loadMomentoDriveIndex(){
+  if(!driveAccessToken)return;
+  momentoDriveState('Momento写真を確認中…'); await ensureMomentoDriveFolder();
+  const map=new Map(); let token='', count=0;
+  do{
+    const fq=encodeURIComponent(`'${momentoDriveFolderId}' in parents and trashed=false`);
+    let url=`https://www.googleapis.com/drive/v3/files?q=${fq}&spaces=drive&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name`;
+    if(token)url+=`&pageToken=${encodeURIComponent(token)}`;
+    const rr=await driveApi(url), data=await rr.json();
+    for(const f of (data.files||[])){ map.set(String(f.name||'').toLowerCase(),f); count++; }
+    token=data.nextPageToken||'';
+  }while(token);
+  momentoDriveFilesByName=map; momentoDriveState(`Momento写真：${count}ファイルを認識しました`); await render();
+}
+async function listMomentoDriveExistingFiles(){ await loadMomentoDriveIndex(); return new Map(momentoDriveFilesByName); }
+async function uploadOneMomentoFile(file){
+  await ensureMomentoDriveFolder();
+  const boundary='kiiMomentoBoundary'+Math.random().toString(36).slice(2);
+  const mime=file.type||'application/octet-stream';
+  const meta=JSON.stringify({name:file.name,mimeType:mime,parents:[momentoDriveFolderId]});
+  const body=new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n`,`--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,file,`\r\n--${boundary}--`],{type:`multipart/related; boundary=${boundary}`});
+  const r=await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,mimeType',{method:'POST',headers:{'Content-Type':`multipart/related; boundary=${boundary}`},body});
+  return await r.json();
+}
+async function requestMomentoWakeLock(){try{if('wakeLock' in navigator)momentoUploadWakeLock=await navigator.wakeLock.request('screen')}catch(e){console.warn(e)}}
+async function releaseMomentoWakeLock(){try{await momentoUploadWakeLock?.release()}catch{} momentoUploadWakeLock=null}
+async function uploadMomentoMatchedFiles(){
+  const files=[...(window.kiiMomentoAttachmentMatches||[])];
+  if(!files.length)throw new Error('先にMomento attachment照合でフォルダを選んでね');
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  const pause=document.getElementById('momentoDrivePauseBtn'), resume=document.getElementById('momentoDriveResumeBtn');
+  pause.disabled=false; resume.disabled=true; momentoUploadPaused=false; await requestMomentoWakeLock();
+  let uploaded=0,skipped=0,failed=0,done=0;
+  const existing=await listMomentoDriveExistingFiles(); const queue=[];
+  for(const f of files){const ex=existing.get(String(f.name||'').toLowerCase()); if(ex&&Number(ex.size||0)>0){skipped++;done++;}else queue.push(f)}
+  setMomentoUploadProgress(done,files.length,uploaded,skipped,failed,'準備完了');
+  const workers=Array.from({length:3},async()=>{
+    while(queue.length){
+      while(momentoUploadPaused)await sleep(500);
+      const f=queue.shift(); if(!f)break;
+      try{
+        setMomentoUploadProgress(done,files.length,uploaded,skipped,failed,`保存中：${f.name}`);
+        let last; for(let a=1;a<=4;a++){try{await uploadOneMomentoFile(f); last=null; break}catch(e){last=e;if(a<4)await sleep(Math.min(12000,800*(2**(a-1))))}} if(last)throw last;
+        uploaded++;
+      }catch(e){failed++;console.warn('Momento upload failed',f.name,e)}
+      done++; setMomentoUploadProgress(done,files.length,uploaded,skipped,failed);
+    }
+  });
+  await Promise.all(workers); await releaseMomentoWakeLock(); pause.disabled=true; resume.disabled=true;
+  momentoDriveState(failed?`Momento写真：${uploaded}保存・${skipped}既存・${failed}失敗。同じattachmentフォルダを選び直して再実行すれば続きからできます。`:`Momento写真：${uploaded}保存・${skipped}既存。アップロード完了 ✓`);
+  await loadMomentoDriveIndex();
+}
+
 async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）')}
 function cloudEntry(e){
   const {id,date,time,text,source,tags,favorite,place,lat,lng,url,attachmentNames}=e;
@@ -649,6 +737,8 @@ async function analyzeMomentoAttachmentFolder(files){
       `<div style="margin-top:7px;color:#888">※まだGoogle Driveにはアップロードしていません。容量確認だけです。</div>`;
   }
   window.kiiMomentoAttachmentMatches=matched.map(x=>x.file);
+  const up=document.getElementById('momentoDriveUploadPanel'); if(up)up.classList.toggle('hidden',!matched.length);
+  const upBtn=document.getElementById('momentoDriveUploadBtn'); if(upBtn)upBtn.textContent=`必要${matched.length}ファイルをアップロード`;
   status(`Momento attachment照合：必要 ${uniqNames.length}種類中 ${matched.length}件発見 / ${formatBytes(bytes)}${missing.length?` / 不足 ${missing.length}件`:''}`);
 }
 
@@ -704,13 +794,15 @@ async function render(){
       const card=document.createElement('article'); card.className='moment'; card.dataset.id=e.id;
       const medias=[]; for(const mid of (e.mediaIds||[])){const m=await get('media',mid); if(m)medias.push(m)}
       const driveMedias=(e.source==='Facebook'?(drivePhotosByDate.get(e.date)||[]):[]);
-      const totalMedia=medias.length+driveMedias.length;
+      const momentoDriveMedias=(e.source==='Momento'?(e.attachmentNames||[]).map(n=>momentoDriveFilesByName.get(String(n||'').toLowerCase())).filter(f=>f&&String(f.mimeType||'').startsWith('image/')):[]);
+      const remoteMedias=driveMedias.concat(momentoDriveMedias);
+      const totalMedia=medias.length+remoteMedias.length;
       let hero='';
       if(medias.length){const url=URL.createObjectURL(medias[0].blob);hero=`<div class="hero"><img class="hero-image" src="${url}" alt=""><span class="hero-count">📷 ${totalMedia}</span></div>`}
-      else if(driveMedias.length){const f=driveMedias[0];hero=`<div class="hero"><img class="hero-image" data-drive-id="${esc(f.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='900'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}"><span class="hero-count">📷 ${totalMedia}</span></div>`}
+      else if(remoteMedias.length){const f=remoteMedias[0];hero=`<div class="hero"><img class="hero-image" data-drive-id="${esc(f.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='900'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}"><span class="hero-count">📷 ${totalMedia}</span></div>`}
       const thumbItems=[];
       medias.forEach((m,i)=>{const u=URL.createObjectURL(m.blob);thumbItems.push(`<img class="${i===0?'active':''}" data-full="${u}" src="${u}" alt="">`)});
-      driveMedias.forEach((f,i)=>{const active=!medias.length&&i===0?'active':'';thumbItems.push(`<img class="${active}" data-drive-id="${esc(f.id)}" data-full-drive-id="${esc(f.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}">`)});
+      remoteMedias.forEach((f,i)=>{const active=!medias.length&&i===0?'active':'';thumbItems.push(`<img class="${active}" data-drive-id="${esc(f.id)}" data-full-drive-id="${esc(f.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}">`)});
       const thumbs=totalMedia>1?`<div class="photo-strip">${thumbItems.join('')}</div>`:'';
       const text=e.text?`<div class="moment-text">${esc(e.text)}</div>`:'';
       const shownPlace=cleanPlace(e.place), place=shownPlace?`<div class="place">📍 ${esc(shownPlace)}</div>`:'';
@@ -722,7 +814,7 @@ async function render(){
     }
     root.appendChild(sec);
   }
-  if(driveAccessToken && drivePhotosByDate.size)observeDriveImages();
+  if(driveAccessToken && (drivePhotosByDate.size||momentoDriveFilesByName.size))observeDriveImages();
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
 
@@ -732,6 +824,9 @@ $('#momentoZip').addEventListener('change',e=>e.target.files[0]&&importMomentoZi
 $('#swarmTextZip').addEventListener('change',e=>e.target.files[0]&&importSwarmTextZip(e.target.files[0]).catch(err=>status('Swarm差し替えエラー: '+err.message)));
 $('#momentoTextZip').addEventListener('change',e=>e.target.files[0]&&importMomentoTextZip(e.target.files[0]).catch(err=>status('Momento日記差し替えエラー: '+err.message)));
 $('#momentoAttachmentFolder').addEventListener('change',e=>e.target.files.length&&analyzeMomentoAttachmentFolder([...e.target.files]).catch(err=>status('Momento attachment照合エラー: '+err.message)));
+$('#momentoDriveUploadBtn')?.addEventListener('click',()=>uploadMomentoMatchedFiles().catch(err=>{releaseMomentoWakeLock();momentoDriveState('Momento写真：アップロードできませんでした');alert(err.message)}));
+$('#momentoDrivePauseBtn')?.addEventListener('click',()=>{momentoUploadPaused=true;$('#momentoDrivePauseBtn').disabled=true;$('#momentoDriveResumeBtn').disabled=false;momentoDriveState('Momento写真：一時停止中')});
+$('#momentoDriveResumeBtn')?.addEventListener('click',()=>{momentoUploadPaused=false;$('#momentoDrivePauseBtn').disabled=false;$('#momentoDriveResumeBtn').disabled=true;momentoDriveState('Momento写真：再開しました')});
 $('#facebookTxt').addEventListener('change',e=>e.target.files[0]&&importFacebookTxt(e.target.files[0]).catch(err=>status('エラー: '+err.message)));
 $('#facebookPhotos').addEventListener('change',e=>e.target.files.length&&importFacebookPhotos([...e.target.files]).catch(err=>status('エラー: '+err.message)));
 $('#search').addEventListener('input',()=>{focusedDate='';render()});$('#sourceFilter').addEventListener('change',render);$('#tagFilter').addEventListener('input',render);$('#favoriteOnly').addEventListener('change',render);$('#exportBtn').addEventListener('click',exportBackup);
