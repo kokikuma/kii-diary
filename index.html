@@ -35,7 +35,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <main>
   <section id="controlPanel" class="control-panel hidden">
     <div class="search-row">
-      <input id="search" type="search" placeholder="記録を検索" />
+      <input id="search" type="search" placeholder="記録を検索（日付・本文・場所など）" />
       <select id="sourceFilter"><option value="">すべて</option><option>Manual</option><option>Momento</option><option>Facebook</option><option>Swarm</option></select>
     </div>
     <div class="search-row" style="margin-top:8px"><input id="tagFilter" type="search" placeholder="タグで絞り込み（例：サッカー）" /></div><label class="temp-filter"><input id="favoriteOnly" type="checkbox" /> お気に入りだけ表示</label>
@@ -467,7 +467,18 @@ async function render(){
   let rows=await all('entries');
   rows=rows.filter(e=>{
     const tags=allTags(e);
-    const qHit=!q||(e.text||'').toLowerCase().includes(q)||(e.place||'').toLowerCase().includes(q)||tags.some(t=>t.toLowerCase().includes(q));
+    const [yy='',mm='',dd='']=(e.date||'').split('-');
+    const m=String(Number(mm||0)), d=String(Number(dd||0));
+    const dateSearch=[
+      e.date||'',
+      yy&&mm?`${yy}/${mm}${dd?`/${dd}`:''}`:'',
+      yy&&m?`${yy}/${m}${d&&d!=='0'?`/${d}`:''}`:'',
+      yy&&m?`${yy}年${m}月${d&&d!=='0'?`${d}日`:''}`:'',
+      m&&d&&d!=='0'?`${m}月${d}日`:'',
+      mm&&dd?`${mm}/${dd}`:'',
+      m&&d&&d!=='0'?`${m}/${d}`:''
+    ].filter(Boolean).join(' ').toLowerCase();
+    const qHit=!q||(e.text||'').toLowerCase().includes(q)||(e.place||'').toLowerCase().includes(q)||dateSearch.includes(q)||tags.some(t=>t.toLowerCase().includes(q));
     const tagHit=!tagQ||tags.some(t=>t.toLowerCase().includes(tagQ));
     return (!sf||e.source===sf)&&qHit&&tagHit&&(!favOnly||e.favorite===true);
   });
