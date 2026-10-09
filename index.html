@@ -379,20 +379,61 @@ async function uploadDrivePhotos(files){
   }
   await loadDrivePhotoIndex();
 }
+const driveImageLoadQueue=[];
+let driveImageLoadWorkers=0;
 async function driveBlobUrl(fileId){
   if(driveBlobUrlCache.has(fileId))return driveBlobUrlCache.get(fileId);
-  const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
-  const blob=await r.blob(); const u=URL.createObjectURL(blob); driveBlobUrlCache.set(fileId,u); return u;
+  let lastErr;
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
+      const blob=await r.blob();
+      if(!blob.size)throw new Error('空の画像データでした');
+      const u=URL.createObjectURL(blob); driveBlobUrlCache.set(fileId,u); return u;
+    }catch(err){
+      lastErr=err;
+      if(String(err?.message||'').includes('接続期限'))throw err;
+      if(attempt<3)await sleep(500*attempt);
+    }
+  }
+  throw lastErr||new Error('Drive写真を読み込めませんでした');
+}
+function enqueueDriveImage(img){
+  if(!img||img.dataset.driveLoading==='1'||img.dataset.driveLoaded==='1')return;
+  img.dataset.driveLoading='1';
+  driveImageLoadQueue.push(img); pumpDriveImageQueue();
+}
+function pumpDriveImageQueue(){
+  while(driveImageLoadWorkers<2&&driveImageLoadQueue.length){
+    const img=driveImageLoadQueue.shift(); driveImageLoadWorkers++;
+    (async()=>{
+      try{
+        img.src=await driveBlobUrl(img.dataset.driveId);
+        img.dataset.driveLoaded='1'; img.removeAttribute('data-drive-error');
+      }catch(err){
+        console.warn('Drive image load failed',img.alt||img.dataset.driveId,err);
+        img.dataset.driveError='1';
+        img.title='写真を読み込めませんでした。タップすると再試行します';
+      }finally{
+        img.dataset.driveLoading='0'; driveImageLoadWorkers--; pumpDriveImageQueue();
+      }
+    })();
+  }
 }
 function observeDriveImages(){
   if(driveImageObserver)driveImageObserver.disconnect();
   driveImageObserver=new IntersectionObserver(entries=>{
-    entries.forEach(async ent=>{
-      if(!ent.isIntersecting)return; const img=ent.target; driveImageObserver.unobserve(img);
-      try{img.src=await driveBlobUrl(img.dataset.driveId)}catch(err){img.alt='Drive写真を読み込めません';console.warn(err)}
+    entries.forEach(ent=>{
+      if(!ent.isIntersecting)return; const img=ent.target; driveImageObserver.unobserve(img); enqueueDriveImage(img);
     });
-  },{rootMargin:'500px 0px'});
-  document.querySelectorAll('img[data-drive-id]').forEach(img=>driveImageObserver.observe(img));
+  },{rootMargin:'350px 0px'});
+  document.querySelectorAll('img[data-drive-id]').forEach(img=>{
+    driveImageObserver.observe(img);
+    if(!img.dataset.driveRetryBound){
+      img.dataset.driveRetryBound='1';
+      img.addEventListener('click',()=>{if(img.dataset.driveError==='1'){img.dataset.driveLoaded='0';img.dataset.driveError='0';enqueueDriveImage(img)}});
+    }
+  });
 }
 
 // ---- Momento Drive media (drive.file / app-created folder only) ----
@@ -646,9 +687,19 @@ function parseMomentoDiaryEntries(filename,text){
     if(cur)cur.lines.push(raw.trimEnd());
   }
   flush();
-  const rows=[];
+
+  const rows=[]; let active=null;
+  const makeRow=(b,p)=>({id:'',date,time:b.time,text:p.textBody,source:'Momento',place:p.place,url:p.url,
+    tags:[...new Set(['Momento',...p.tags])],favorite:false,mediaIds:[],attachmentNames:[...p.attachmentNames]});
+  const finalize=row=>{
+    if(!row)return;
+    if(!row.text && !(row.attachmentNames||[]).length && !row.place && !row.url)return;
+    row.tags=[...new Set(row.tags||['Momento'])];
+    row.id=momentoStableId(row.date,row.time,row.text,row.attachmentNames,row.place);
+    rows.push(row);
+  };
+
   for(const b of blocks){
-    // Facebook / Twitter / Swarm など Feed: が付く記録は全部除外。
     if(b.lines.some(x=>/^Feed\s*:/i.test(x.trim())))continue;
     let place='',url=''; const body=[],tags=[],attachmentNames=[];
     for(const raw of b.lines){
@@ -660,14 +711,22 @@ function parseMomentoDiaryEntries(filename,text){
       if(line)body.push(raw.trimEnd());
     }
     const textBody=body.join('\n').trim();
-    // 空の時刻枠は取り込まない。
-    if(!textBody&&!attachmentNames.length&&!place&&!url)continue;
-    const cleanTags=[...new Set(['Momento',...tags])];
-    rows.push({
-      id:momentoStableId(date,b.time,textBody,attachmentNames,place),date,time:b.time,text:textBody,
-      source:'Momento',place,url,tags:cleanTags,favorite:false,mediaIds:[],attachmentNames
-    });
+    // Tags はメタデータ。Tagsだけ/Tags+Mediaだけの時刻枠は新しい日記にしない。
+    const hasRealContent=!!(textBody || place || url);
+    const hasMedia=attachmentNames.length>0;
+    if(!hasRealContent && !hasMedia && !tags.length)continue;
+
+    if(hasRealContent){
+      finalize(active);
+      active=makeRow(b,{textBody,place,url,tags,attachmentNames});
+    }else if(active){
+      if(hasMedia)active.attachmentNames.push(...attachmentNames);
+      if(tags.length)active.tags=[...new Set([...(active.tags||[]),...tags])];
+    }else if(hasMedia){
+      active=makeRow(b,{textBody:'',place:'',url:'',tags,attachmentNames});
+    }
   }
+  finalize(active);
   return rows;
 }
 async function deleteRemoteMomentoEntries(){
@@ -684,7 +743,7 @@ async function deleteRemoteMomentoEntries(){
 }
 async function importMomentoTextZip(file){
   if(!confirm('今あるMomento記録だけを削除して、text.zip内の「Feedなし」の日記に差し替えますか？\nFacebook・Twitter・Swarmは取り込みません。既存のFacebook/Swarm記録も削除しません。'))return;
-  status('Momento日記を解析中… Facebook / Twitter / SwarmなどFeed付き記録は除外します');
+  status('Momento日記を再構築中… Feed付き記録は除外し、Tags/Mediaだけの時刻枠は直前の日記へまとめます');
   const zip=await JSZip.loadAsync(file); const rows=[];
   for(const [name,obj] of Object.entries(zip.files)){
     if(obj.dir||!name.toLowerCase().endsWith('.txt'))continue;
@@ -700,7 +759,7 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momento日記差し替え完了：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を後の紐付け用に保存${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momentoまとめ直し完了（grouped-v3）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 async function importFacebookTxt(file){status('Facebookテキストを読み込み中…');const rows=parseFacebook(await file.text());for(const e of rows)await put('entries',e);status(`Facebook投稿を ${rows.length} 件取り込みました`);await render()}
 
