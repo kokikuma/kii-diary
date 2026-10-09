@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v8</title>
+<title>Days — grouped-v9</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -25,7 +25,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v8</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v9</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -115,6 +115,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
               <button id="momentoDeepPauseBtn" type="button" disabled>一時停止</button>
               <button id="momentoDeepResumeBtn" type="button" disabled>再開</button>
               <button id="momentoDeepStopBtn" type="button" disabled>中止</button>
+              <button id="momentoDeepResetBtn" type="button">途中保存をクリア</button>
             </div>
             <div id="momentoDeepAuditProgress" style="margin-top:8px;color:#666">未実行</div>
             <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px"><div id="momentoDeepAuditBar" style="height:100%;width:0%;background:#56C3F0"></div></div>
@@ -637,55 +638,93 @@ async function testOneMomentoDriveImage(name,remote){
 async function waitMomentoDeepAudit(){
   while(momentoDeepAuditPaused && !momentoDeepAuditCancelled)await sleep(400);
 }
+const MOMENTO_DEEP_AUDIT_KEY='kiiMomentoDeepAuditV9';
+function loadMomentoDeepCheckpoint(){
+  try{return JSON.parse(localStorage.getItem(MOMENTO_DEEP_AUDIT_KEY)||'null')||{done:{},failed:{},unsupported:{}}}catch{return {done:{},failed:{},unsupported:{}}}
+}
+function saveMomentoDeepCheckpoint(cp){
+  try{localStorage.setItem(MOMENTO_DEEP_AUDIT_KEY,JSON.stringify(cp))}catch(e){console.warn('checkpoint save failed',e)}
+}
+function clearMomentoDeepCheckpoint(){
+  localStorage.removeItem(MOMENTO_DEEP_AUDIT_KEY);
+  const resultEl=document.getElementById('momentoDeepAuditResult');
+  if(resultEl)resultEl.textContent='途中保存をクリアしました。次回は最初から点検します。';
+}
+function updateMomentoDeepResumeHint(){
+  const cp=loadMomentoDeepCheckpoint();
+  const n=Object.keys(cp.done||{}).length;
+  const btn=document.getElementById('momentoDeepAuditBtn');
+  if(btn)btn.textContent=n?`続きから実表示テスト（${n}件済み）`:'全画像を実表示テスト';
+}
 async function runMomentoDeepPhotoAudit(){
   if(momentoDeepAuditRunning)return;
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
   momentoDeepAuditRunning=true; momentoDeepAuditPaused=false; momentoDeepAuditCancelled=false; momentoDeepAuditFailedNames=[];
   const startBtn=document.getElementById('momentoDeepAuditBtn'), pauseBtn=document.getElementById('momentoDeepPauseBtn'), resumeBtn=document.getElementById('momentoDeepResumeBtn'), stopBtn=document.getElementById('momentoDeepStopBtn'), resultEl=document.getElementById('momentoDeepAuditResult');
   if(startBtn)startBtn.disabled=true; if(pauseBtn)pauseBtn.disabled=false; if(resumeBtn)resumeBtn.disabled=true; if(stopBtn)stopBtn.disabled=false;
-  if(resultEl)resultEl.textContent='Driveの写真を実際に読み込んで確認中…';
+  if(resultEl)resultEl.textContent='途中保存を使ってDrive写真を高速点検中…（接続が切れても続きから再開できます）';
+  const cp=loadMomentoDeepCheckpoint(); cp.done=cp.done||{};cp.failed=cp.failed||{};cp.unsupported=cp.unsupported||{};
+  let authExpired=false;
   try{
     await loadMomentoDriveIndex();
     const expected=await getMomentoExpectedNames();
     const queue=[], missing=[], unsupported=[];
     for(const name of expected){
-      const remote=momentoDriveFilesByName.get(String(name).toLowerCase());
-      if(!remote){missing.push(name);continue;}
-      if(!isDisplayableImageFile(remote)){unsupported.push(name);continue;}
-      queue.push({name,remote});
+      const key=String(name).toLowerCase();
+      if(cp.done[key])continue;
+      const remote=momentoDriveFilesByName.get(key);
+      if(!remote){missing.push(name);cp.done[key]=1;cp.failed[key]=name;continue;}
+      if(!isDisplayableImageFile(remote)){unsupported.push(name);cp.done[key]=1;cp.unsupported[key]=name;continue;}
+      queue.push({name,remote,key});
     }
-    let done=missing.length+unsupported.length, ok=0, failed=missing.length, skipped=unsupported.length;
-    const failures=[...missing];
-    setMomentoDeepAuditProgress(done,expected.length,ok,failed,skipped,'準備完了');
-    const workers=Array.from({length:2},async()=>{
-      while(queue.length && !momentoDeepAuditCancelled){
-        await waitMomentoDeepAudit(); if(momentoDeepAuditCancelled)break;
+    saveMomentoDeepCheckpoint(cp);
+    let done=Object.keys(cp.done).length;
+    let failed=Object.keys(cp.failed).length;
+    let skipped=Object.keys(cp.unsupported).length;
+    let ok=Math.max(0,done-failed-skipped);
+    setMomentoDeepAuditProgress(done,expected.length,ok,failed,skipped,queue.length?`未点検 ${queue.length}件`:'準備完了');
+    let sinceSave=0;
+    const worker=async()=>{
+      while(queue.length && !momentoDeepAuditCancelled && !authExpired){
+        await waitMomentoDeepAudit(); if(momentoDeepAuditCancelled||authExpired)break;
         const item=queue.shift(); if(!item)break;
         setMomentoDeepAuditProgress(done,expected.length,ok,failed,skipped,`確認中：${item.name}`);
         try{
           const r=await testOneMomentoDriveImage(item.name,item.remote);
-          if(r.ok){ok++;driveDisplayErrors.delete(item.name);}
-          else{failed++;failures.push(item.name);driveDisplayErrors.add(item.name);}
+          if(r.ok){ok++;delete cp.failed[item.key];driveDisplayErrors.delete(item.name);}
+          else{failed++;cp.failed[item.key]=item.name;driveDisplayErrors.add(item.name);}
+          cp.done[item.key]=1; done++; sinceSave++;
         }catch(err){
-          if(String(err?.message||'').includes('接続期限')){momentoDeepAuditCancelled=true;throw err;}
-          failed++;failures.push(item.name);driveDisplayErrors.add(item.name);
+          if(String(err?.message||'').includes('接続期限') || !driveAccessToken){
+            authExpired=true;
+            // この項目は未完了のまま戻す。次回ここから再試行。
+            queue.unshift(item);
+            break;
+          }
+          failed++;cp.failed[item.key]=item.name;cp.done[item.key]=1;driveDisplayErrors.add(item.name);done++;sinceSave++;
         }
-        done++; setMomentoDeepAuditProgress(done,expected.length,ok,failed,skipped); updateDriveErrorState();
+        if(sinceSave>=10){saveMomentoDeepCheckpoint(cp);sinceSave=0;}
+        setMomentoDeepAuditProgress(done,expected.length,ok,failed,skipped); updateDriveErrorState();
       }
-    });
-    await Promise.all(workers);
-    momentoDeepAuditFailedNames=[...new Set(failures)];
+    };
+    // v8の2並列より高速。Drive/回線に過負荷をかけすぎない8並列。
+    await Promise.all(Array.from({length:8},()=>worker()));
+    saveMomentoDeepCheckpoint(cp);
+    momentoDeepAuditFailedNames=Object.values(cp.failed);
     momentoAuditRepairNames=momentoDeepAuditFailedNames.filter(n=>momentoLocalFilesByName.has(String(n).toLowerCase()));
     const repairBtn=document.getElementById('momentoRepairBtn'); if(repairBtn)repairBtn.disabled=!momentoAuditRepairNames.length;
     const sample=momentoDeepAuditFailedNames.slice(0,12).join(' / ');
+    const remaining=expected.length-Object.keys(cp.done).length;
     if(resultEl){
-      if(momentoDeepAuditCancelled)resultEl.textContent=`中止しました。ここまで：正常 ${ok} / 失敗 ${failed} / 対象外 ${skipped}`;
-      else if(!failed)resultEl.textContent=`実表示テスト完了 ✓  正常 ${ok} / 失敗 0 / 対象外 ${skipped}${skipped?'（画像以外など）':''}`;
-      else resultEl.textContent=`実表示テスト完了：正常 ${ok} / 失敗 ${failed} / 対象外 ${skipped}。失敗例：${sample}${momentoDeepAuditFailedNames.length>12?' …':''}`;
+      if(authExpired)resultEl.textContent=`Drive接続が切れたため自動停止。進捗 ${Object.keys(cp.done).length}/${expected.length} は保存済み。再接続後「続きから実表示テスト」で残り ${remaining}件だけ再開できます。`;
+      else if(momentoDeepAuditCancelled)resultEl.textContent=`中止しました。進捗 ${Object.keys(cp.done).length}/${expected.length} は保存済み。次回は続きから再開できます。`;
+      else if(!momentoDeepAuditFailedNames.length)resultEl.textContent=`実表示テスト完了 ✓  正常 ${ok} / 失敗 0 / 対象外 ${skipped}`;
+      else resultEl.textContent=`実表示テスト完了：正常 ${ok} / 失敗 ${momentoDeepAuditFailedNames.length} / 対象外 ${skipped}。失敗例：${sample}${momentoDeepAuditFailedNames.length>12?' …':''}`;
     }
   }finally{
     momentoDeepAuditRunning=false;
     if(startBtn)startBtn.disabled=false; if(pauseBtn)pauseBtn.disabled=true; if(resumeBtn)resumeBtn.disabled=true; if(stopBtn)stopBtn.disabled=true;
+    updateMomentoDeepResumeHint();
   }
 }
 
@@ -986,7 +1025,7 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momentoまとめ直し完了（grouped-v8）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momentoまとめ直し完了（grouped-v9）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 
 function rawMomentoMediaRefsByDate(filename,text){
@@ -1203,6 +1242,8 @@ $('#momentoDrivePauseBtn')?.addEventListener('click',()=>{momentoUploadPaused=tr
 $('#momentoDriveResumeBtn')?.addEventListener('click',()=>{momentoUploadPaused=false;$('#momentoDrivePauseBtn').disabled=false;$('#momentoDriveResumeBtn').disabled=true;momentoDriveState('Momento写真：再開しました')});
 $('#momentoAuditBtn')?.addEventListener('click',()=>runMomentoPhotoAudit().catch(err=>{momentoAuditState('点検エラー：'+err.message)}));
 $('#momentoDeepAuditBtn')?.addEventListener('click',()=>runMomentoDeepPhotoAudit().catch(err=>{const x=document.getElementById('momentoDeepAuditResult');if(x)x.textContent='実表示テストエラー：'+err.message;}));
+$('#momentoDeepResetBtn')?.addEventListener('click',()=>{if(confirm('実表示テストの途中保存を消して、次回は最初からにしますか？')){clearMomentoDeepCheckpoint();updateMomentoDeepResumeHint();}});
+updateMomentoDeepResumeHint();
 $('#momentoDeepPauseBtn')?.addEventListener('click',()=>{momentoDeepAuditPaused=true;$('#momentoDeepPauseBtn').disabled=true;$('#momentoDeepResumeBtn').disabled=false;});
 $('#momentoDeepResumeBtn')?.addEventListener('click',()=>{momentoDeepAuditPaused=false;$('#momentoDeepPauseBtn').disabled=false;$('#momentoDeepResumeBtn').disabled=true;});
 $('#momentoDeepStopBtn')?.addEventListener('click',()=>{momentoDeepAuditCancelled=true;momentoDeepAuditPaused=false;});
