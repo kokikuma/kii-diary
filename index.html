@@ -211,8 +211,7 @@ async function driveConnect(){
   if(!credential?.accessToken)throw new Error('Google Drive用の認証情報を取得できませんでした');
   driveAccessToken=credential.accessToken;
   sessionStorage.setItem('kiiDriveAccessToken',driveAccessToken);
-  await loadDrivePhotoIndex();
-  try{await loadMomentoDriveIndex()}catch(e){console.warn(e)}
+  await refreshAllDrivePhotoIndexes();
 }
 async function driveApi(url,options={}){
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
@@ -431,6 +430,16 @@ async function loadMomentoDriveIndex(){
   }while(token);
   momentoDriveFilesByName=map; momentoDriveState(`Momento写真：${count}ファイルを認識しました`); await render();
 }
+
+async function refreshAllDrivePhotoIndexes(){
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  driveState('Facebook・Momento写真を確認中…');
+  await loadDrivePhotoIndex();
+  await loadMomentoDriveIndex();
+  const facebookCount=[...drivePhotosByDate.values()].reduce((n,arr)=>n+arr.length,0);
+  const momentoCount=momentoDriveFilesByName.size;
+  driveState(`Drive写真：Facebook ${facebookCount}枚 / Momento ${momentoCount}ファイルを認識しました`);
+}
 async function listMomentoDriveExistingFiles(){ await loadMomentoDriveIndex(); return new Map(momentoDriveFilesByName); }
 async function uploadOneMomentoFile(file){
   await ensureMomentoDriveFolder();
@@ -472,7 +481,7 @@ async function uploadMomentoMatchedFiles(){
   await loadMomentoDriveIndex();
 }
 
-async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）')}
+async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();momentoDriveFilesByName=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）');momentoDriveState('Momento写真：未確認')}
 function cloudEntry(e){
   const {id,date,time,text,source,tags,favorite,place,lat,lng,url,attachmentNames}=e;
   return {id,date:date||'',time:time||'',text:text||'',source:source||'Manual',tags:Array.isArray(tags)?tags:[],favorite:!!favorite,place:place||'',lat:lat??null,lng:lng??null,url:url||'',attachmentNames:Array.isArray(attachmentNames)?attachmentNames:[],updatedAt:Date.now()};
@@ -509,7 +518,7 @@ window.addEventListener('DOMContentLoaded',()=>{initFirebase();
   document.getElementById('cloudUploadBtn')?.addEventListener('click',()=>cloudUpload().catch(e=>alert(e.message)));
   document.getElementById('cloudDownloadBtn')?.addEventListener('click',()=>cloudDownload().catch(e=>alert(e.message)));
   document.getElementById('driveConnectBtn')?.addEventListener('click',()=>driveConnect().catch(e=>{driveState('Drive写真：接続できませんでした');alert(e.message)}));
-  document.getElementById('driveRefreshBtn')?.addEventListener('click',()=>loadDrivePhotoIndex().catch(e=>alert(e.message)));
+  document.getElementById('driveRefreshBtn')?.addEventListener('click',()=>refreshAllDrivePhotoIndexes().catch(e=>alert(e.message)));
   const startDriveBulk=e=>{const files=[...(e.target.files||[])];if(files.length)uploadDrivePhotos(files).catch(err=>{releaseDriveWakeLock();driveState('Drive写真：アップロードできませんでした');alert(err.message)});};
   document.getElementById('drivePhotoUpload')?.addEventListener('change',startDriveBulk);
   document.getElementById('drivePhotoFolderUpload')?.addEventListener('change',startDriveBulk);
