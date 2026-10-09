@@ -25,7 +25,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days</div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.75;vertical-align:middle">grouped-v2</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -739,7 +739,7 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momento日記再構築完了：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文単位にまとめました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momentoまとめ直し完了（grouped-v2）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 async function importFacebookTxt(file){status('Facebookテキストを読み込み中…');const rows=parseFacebook(await file.text());for(const e of rows)await put('entries',e);status(`Facebook投稿を ${rows.length} 件取り込みました`);await render()}
 
