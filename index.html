@@ -646,28 +646,67 @@ function parseMomentoDiaryEntries(filename,text){
     if(cur)cur.lines.push(raw.trimEnd());
   }
   flush();
+
+  // Momentoの書き出しでは、1つの日記に後から追加した写真が
+  // 「時刻 + Media: ...」だけの別ブロックとして連続することがある。
+  // 本文のあるブロックを1件の日記の起点にし、その後のMediaだけのブロックは
+  // 次の本文ブロックが来るまで直前の日記へまとめる。
   const rows=[];
+  let active=null;
+
+  const makeRow=(b, parsed)=>({
+    id:'',date,time:b.time,text:parsed.textBody,source:'Momento',place:parsed.place,url:parsed.url,
+    tags:[...new Set(['Momento',...parsed.tags])],favorite:false,mediaIds:[],
+    attachmentNames:[...parsed.attachmentNames]
+  });
+  const finalize=(row)=>{
+    if(!row)return;
+    // 完全な空枠は捨てる。写真だけの日記は残す。
+    if(!row.text && !(row.attachmentNames||[]).length && !row.place && !row.url)return;
+    row.id=momentoStableId(row.date,row.time,row.text,row.attachmentNames,row.place);
+    rows.push(row);
+  };
+
   for(const b of blocks){
-    // Facebook / Twitter / Swarm など Feed: が付く記録は全部除外。
+    // Facebook / Twitter / Swarm 等、Feed: の付く記録はMomento日記としては除外。
     if(b.lines.some(x=>/^Feed\s*:/i.test(x.trim())))continue;
+
     let place='',url=''; const body=[],tags=[],attachmentNames=[];
     for(const raw of b.lines){
       const line=raw.trim();
-      if(/^Media\s*:/i.test(line)){const n=line.replace(/^Media\s*:\s*/i,'').trim();if(n)attachmentNames.push(n);continue}
-      if(/^Tags\s*:/i.test(line)){tags.push(...line.replace(/^Tags\s*:\s*/i,'').split(',').map(x=>x.trim()).filter(Boolean));continue}
+      if(/^Media\s*:/i.test(line)){
+        const n=line.replace(/^Media\s*:\s*/i,'').trim();
+        if(n)attachmentNames.push(n);
+        continue;
+      }
+      if(/^Tags\s*:/i.test(line)){
+        tags.push(...line.replace(/^Tags\s*:\s*/i,'').split(',').map(x=>x.trim()).filter(Boolean));
+        continue;
+      }
       if(/^At\s*:/i.test(line)){place=line.replace(/^At\s*:\s*/i,'').trim();continue}
       if(/^URL\s*:/i.test(line)){url=line.replace(/^URL\s*:\s*/i,'').trim();continue}
       if(line)body.push(raw.trimEnd());
     }
     const textBody=body.join('\n').trim();
-    // 空の時刻枠は取り込まない。
-    if(!textBody&&!attachmentNames.length&&!place&&!url)continue;
-    const cleanTags=[...new Set(['Momento',...tags])];
-    rows.push({
-      id:momentoStableId(date,b.time,textBody,attachmentNames,place),date,time:b.time,text:textBody,
-      source:'Momento',place,url,tags:cleanTags,favorite:false,mediaIds:[],attachmentNames
-    });
+    const hasContent=!!(textBody || place || url || tags.length);
+    const hasMedia=attachmentNames.length>0;
+    if(!hasContent && !hasMedia)continue;
+
+    if(hasContent){
+      // 新しい本文が来たら、直前の日記を確定して新規開始。
+      finalize(active);
+      active=makeRow(b,{textBody,place,url,tags,attachmentNames});
+    }else if(hasMedia){
+      if(active){
+        // 写真だけのブロックは直前の日記へ追加。
+        active.attachmentNames.push(...attachmentNames);
+      }else{
+        // その日に本文より先に写真だけがある場合は、写真だけの日記として開始。
+        active=makeRow(b,{textBody:'',place:'',url:'',tags:[],attachmentNames});
+      }
+    }
   }
+  finalize(active);
   return rows;
 }
 async function deleteRemoteMomentoEntries(){
@@ -684,7 +723,7 @@ async function deleteRemoteMomentoEntries(){
 }
 async function importMomentoTextZip(file){
   if(!confirm('今あるMomento記録だけを削除して、text.zip内の「Feedなし」の日記に差し替えますか？\nFacebook・Twitter・Swarmは取り込みません。既存のFacebook/Swarm記録も削除しません。'))return;
-  status('Momento日記を解析中… Facebook / Twitter / SwarmなどFeed付き記録は除外します');
+  status('Momento日記を解析中… Feed付き記録は除外し、Mediaだけの時刻枠は直前の日記へまとめます');
   const zip=await JSZip.loadAsync(file); const rows=[];
   for(const [name,obj] of Object.entries(zip.files)){
     if(obj.dir||!name.toLowerCase().endsWith('.txt'))continue;
@@ -700,7 +739,7 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momento日記差し替え完了：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を後の紐付け用に保存${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momento日記再構築完了：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文単位にまとめました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 async function importFacebookTxt(file){status('Facebookテキストを読み込み中…');const rows=parseFacebook(await file.text());for(const e of rows)await put('entries',e);status(`Facebook投稿を ${rows.length} 件取り込みました`);await render()}
 
