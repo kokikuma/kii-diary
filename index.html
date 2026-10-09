@@ -80,9 +80,11 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
         <label>Momento ZIP<input id="momentoZip" type="file" accept=".zip" /></label>
         <label>Swarm差し替え（text.zip）<input id="swarmTextZip" type="file" accept=".zip" /></label>
         <label>Momento日記差し替え（text.zip）<input id="momentoTextZip" type="file" accept=".zip" /></label>
+        <label>Momento attachment照合<input id="momentoAttachmentFolder" type="file" webkitdirectory directory multiple /></label>
         <label>Facebook.txt<input id="facebookTxt" type="file" accept=".txt,text/plain" /></label>
         <label>Facebook写真<input id="facebookPhotos" type="file" accept="image/*" multiple /></label>
       </div>
+      <div id="momentoAttachmentCheckResult" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px solid #d8d0c8;border-radius:9px;background:#fff;font-size:12px;line-height:1.65;color:#5b554f"></div>
       <div class="actions"><button id="exportBtn">バックアップを書き出す</button><button id="clearBtn" class="danger">試作データを全削除</button></div>
       <p id="status" class="status"></p>
     </details>
@@ -602,6 +604,54 @@ async function importMomentoTextZip(file){
   status(`Momento日記差し替え完了：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を後の紐付け用に保存${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 async function importFacebookTxt(file){status('Facebookテキストを読み込み中…');const rows=parseFacebook(await file.text());for(const e of rows)await put('entries',e);status(`Facebook投稿を ${rows.length} 件取り込みました`);await render()}
+
+function formatBytes(bytes){
+  const n=Number(bytes||0); if(!n)return '0 B';
+  const units=['B','KB','MB','GB','TB']; let i=0,v=n;
+  while(v>=1024&&i<units.length-1){v/=1024;i++}
+  const d=i>=3?2:(i===2?1:0); return `${v.toFixed(d)} ${units[i]}`;
+}
+function isLikelyImageName(name){return /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(String(name||''))}
+async function analyzeMomentoAttachmentFolder(files){
+  files=[...(files||[])].filter(f=>f && f.name);
+  if(!files.length)return;
+  status(`Momento attachmentを照合中… ${files.length}ファイル`);
+  const entries=(await all('entries')).filter(e=>e.source==='Momento');
+  const refs=[];
+  for(const e of entries)for(const n of (e.attachmentNames||[]))if(n)refs.push(String(n).trim());
+  const uniqNames=[...new Set(refs)];
+  const byExact=new Map(), byLower=new Map();
+  for(const f of files){
+    const base=(f.name||'').split(/[\\/]/).pop();
+    if(!byExact.has(base))byExact.set(base,f);
+    const low=base.toLowerCase(); if(!byLower.has(low))byLower.set(low,f);
+  }
+  const matched=[],missing=[];
+  let bytes=0,imageCount=0,otherCount=0;
+  for(const n of uniqNames){
+    const f=byExact.get(n)||byLower.get(n.toLowerCase());
+    if(f){matched.push({name:n,file:f});bytes+=Number(f.size||0);if(isLikelyImageName(f.name)||String(f.type||'').startsWith('image/'))imageCount++;else otherCount++;}
+    else missing.push(n);
+  }
+  const totalFolderBytes=files.reduce((a,f)=>a+Number(f.size||0),0);
+  const result=document.getElementById('momentoAttachmentCheckResult');
+  if(result){
+    const missSample=missing.slice(0,8).map(x=>`<div style="overflow-wrap:anywhere">・${esc(x)}</div>`).join('');
+    result.classList.remove('hidden');
+    result.innerHTML=`<div style="font-weight:800;font-size:13px;margin-bottom:4px">Momento attachment 照合結果</div>`+
+      `<div>日記内のMedia参照：<b>${refs.length}</b>件（ファイル名 ${uniqNames.length}種類）</div>`+
+      `<div>見つかった必要ファイル：<b>${matched.length}</b> / ${uniqNames.length}</div>`+
+      `<div>必要ファイルの合計容量：<b>${formatBytes(bytes)}</b></div>`+
+      `<div>画像：${imageCount}件${otherCount?` / その他：${otherCount}件`:''}</div>`+
+      `<div>attachmentフォルダ全体：${files.length}ファイル / ${formatBytes(totalFolderBytes)}</div>`+
+      `<div style="margin-top:6px;color:${missing.length?'#9b3f39':'#56865a'};font-weight:700">${missing.length?`見つからないファイル：${missing.length}件`:'必要ファイルはすべて見つかりました ✓'}</div>`+
+      (missing.length?`<details style="margin-top:5px"><summary>見つからない名前の例</summary>${missSample}</details>`:'')+
+      `<div style="margin-top:7px;color:#888">※まだGoogle Driveにはアップロードしていません。容量確認だけです。</div>`;
+  }
+  window.kiiMomentoAttachmentMatches=matched.map(x=>x.file);
+  status(`Momento attachment照合：必要 ${uniqNames.length}種類中 ${matched.length}件発見 / ${formatBytes(bytes)}${missing.length?` / 不足 ${missing.length}件`:''}`);
+}
+
 async function importFacebookPhotos(files){status(`Facebook写真 ${files.length} 枚を整理中…`);const entries=await all('entries');const byDate=new Map(entries.filter(e=>e.source==='Facebook').map(e=>[e.date,e]));let linked=0,orphan=0;for(const f of files){const d=dateFromFilename(f.name);if(!d){orphan++;continue}let e=byDate.get(d);if(!e){e={id:uid(),date:d,time:'',text:'',source:'Facebook',tags:['Facebook'],favorite:false,mediaIds:[]};byDate.set(d,e)}const mid=await addMedia(f,f.name,d,'Facebook');e.mediaIds=e.mediaIds||[];e.mediaIds.push(mid);await put('entries',e);linked++}status(`Facebook写真 ${linked} 枚を日付で紐付けました${orphan?`（判定できず ${orphan} 枚）`:''}`);await render()}
 
 function autoTagForSource(source){return source==='Manual'?'日記':(source||'日記')}
@@ -681,6 +731,7 @@ async function exportBackup(){status('バックアップ作成中…');const ent
 $('#momentoZip').addEventListener('change',e=>e.target.files[0]&&importMomentoZip(e.target.files[0]).catch(err=>status('エラー: '+err.message)));
 $('#swarmTextZip').addEventListener('change',e=>e.target.files[0]&&importSwarmTextZip(e.target.files[0]).catch(err=>status('Swarm差し替えエラー: '+err.message)));
 $('#momentoTextZip').addEventListener('change',e=>e.target.files[0]&&importMomentoTextZip(e.target.files[0]).catch(err=>status('Momento日記差し替えエラー: '+err.message)));
+$('#momentoAttachmentFolder').addEventListener('change',e=>e.target.files.length&&analyzeMomentoAttachmentFolder([...e.target.files]).catch(err=>status('Momento attachment照合エラー: '+err.message)));
 $('#facebookTxt').addEventListener('change',e=>e.target.files[0]&&importFacebookTxt(e.target.files[0]).catch(err=>status('エラー: '+err.message)));
 $('#facebookPhotos').addEventListener('change',e=>e.target.files.length&&importFacebookPhotos([...e.target.files]).catch(err=>status('エラー: '+err.message)));
 $('#search').addEventListener('input',()=>{focusedDate='';render()});$('#sourceFilter').addEventListener('change',render);$('#tagFilter').addEventListener('input',render);$('#favoriteOnly').addEventListener('change',render);$('#exportBtn').addEventListener('click',exportBackup);
