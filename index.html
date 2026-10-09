@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v12</title>
+<title>Days — grouped-v13</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -25,7 +25,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v12</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v13</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -105,6 +105,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
             <button id="runtimeErrorClearBtn" type="button">エラー記録をクリア</button>
           </div>
           <div id="runtimeErrorState" style="margin-top:7px;color:#666;line-height:1.55">実画面エラー：0件</div>
+          <div id="runtimeErrorCloudState" style="margin-top:4px;color:#999;font-size:12px;line-height:1.45">Google保存：ログイン後に同期します</div>
           <details id="runtimeErrorDetails" style="margin-top:8px">
             <summary style="cursor:pointer;color:#666">エラー写真の一覧を見る</summary>
             <div id="runtimeErrorList" style="margin-top:8px;color:#666;line-height:1.55;white-space:pre-wrap"></div>
@@ -225,7 +226,7 @@ async function initFirebase(){
     const app=appMod.initializeApp(cfg);
     fbAuth=authMod.getAuth(app); fbDb=fsMod.getFirestore(app);
     fbFns={...authMod,...fsMod}; firebaseReady=true;
-    authMod.onAuthStateChanged(fbAuth,u=>{firebaseUser=u||null;if(state)state.textContent=u?`接続中：${u.email||u.uid}`:'Googleに未ログイン';});
+    authMod.onAuthStateChanged(fbAuth,u=>{firebaseUser=u||null;if(state)state.textContent=u?`接続中：${u.email||u.uid}`:'Googleに未ログイン';if(u){loadRuntimeErrorsFromCloud();}else{runtimeErrorCloudLoadedForUid='';setRuntimeErrorCloudState('Google保存：ログイン後に同期します');}});
   }catch(err){ if(state)state.textContent='Firebase接続エラー：'+err.message; }
 }
 async function firebaseLogin(){
@@ -246,7 +247,59 @@ try{
   for(const x of Array.isArray(saved)?saved:[]){if(x&&x.name)runtimeDisplayErrorMap.set(String(x.name).toLowerCase(),x)}
 }catch{}
 const driveDisplayErrors=new Set([...runtimeDisplayErrorMap.values()].map(x=>x.name));
-function saveRuntimeDisplayErrors(){localStorage.setItem(RUNTIME_ERROR_KEY,JSON.stringify([...runtimeDisplayErrorMap.values()]));}
+let runtimeErrorCloudTimer=null;
+let runtimeErrorCloudLoadedForUid='';
+function setRuntimeErrorCloudState(msg){const el=document.getElementById('runtimeErrorCloudState');if(el)el.textContent=msg;}
+function saveRuntimeDisplayErrors(){
+  localStorage.setItem(RUNTIME_ERROR_KEY,JSON.stringify([...runtimeDisplayErrorMap.values()]));
+  scheduleRuntimeErrorCloudSave();
+}
+function mergeRuntimeErrorRows(rows){
+  for(const x of Array.isArray(rows)?rows:[]){
+    if(!x||!x.name)continue;
+    const key=String(x.name).toLowerCase(), old=runtimeDisplayErrorMap.get(key);
+    if(!old){runtimeDisplayErrorMap.set(key,{...x,name:String(x.name)});continue}
+    const first=[old.firstSeen,x.firstSeen].filter(Boolean).sort()[0]||old.firstSeen||x.firstSeen||'';
+    const last=[old.lastSeen,x.lastSeen].filter(Boolean).sort().slice(-1)[0]||old.lastSeen||x.lastSeen||'';
+    runtimeDisplayErrorMap.set(key,{...old,...x,name:old.name||x.name,date:old.date||x.date||'',entryId:old.entryId||x.entryId||'',firstSeen:first,lastSeen:last,count:Math.max(Number(old.count||0),Number(x.count||0))});
+  }
+  driveDisplayErrors.clear();
+  for(const x of runtimeDisplayErrorMap.values())driveDisplayErrors.add(String(x.name));
+  localStorage.setItem(RUNTIME_ERROR_KEY,JSON.stringify([...runtimeDisplayErrorMap.values()]));
+  updateDriveErrorState();updateRuntimeErrorPanel();
+}
+async function loadRuntimeErrorsFromCloud(){
+  if(!firebaseUser||!fbDb||!fbFns?.getDoc)return;
+  if(runtimeErrorCloudLoadedForUid===firebaseUser.uid)return;
+  runtimeErrorCloudLoadedForUid=firebaseUser.uid;
+  try{
+    setRuntimeErrorCloudState('Google保存：記録を読み込み中…');
+    const ref=fbFns.doc(fbDb,'users',firebaseUser.uid,'appState','runtimePhotoErrors');
+    const snap=await fbFns.getDoc(ref);
+    if(snap.exists())mergeRuntimeErrorRows(snap.data()?.items||[]);
+    setRuntimeErrorCloudState(`Google保存：同期済み（${runtimeDisplayErrorMap.size}件）`);
+    // ローカル側にだけ残っていた記録もクラウドへ統合保存
+    await pushRuntimeErrorsToCloud();
+  }catch(e){
+    console.warn('runtime error cloud load failed',e);
+    setRuntimeErrorCloudState('Google保存：同期できませんでした（端末内の記録は残っています）');
+  }
+}
+async function pushRuntimeErrorsToCloud(){
+  if(!firebaseUser||!fbDb||!fbFns?.setDoc){setRuntimeErrorCloudState('Google保存：ログイン後に同期します');return}
+  try{
+    const ref=fbFns.doc(fbDb,'users',firebaseUser.uid,'appState','runtimePhotoErrors');
+    await fbFns.setDoc(ref,{items:[...runtimeDisplayErrorMap.values()],updatedAt:Date.now()});
+    setRuntimeErrorCloudState(`Google保存：同期済み（${runtimeDisplayErrorMap.size}件）`);
+  }catch(e){
+    console.warn('runtime error cloud save failed',e);
+    setRuntimeErrorCloudState('Google保存：保存できませんでした（端末内には保存済み）');
+  }
+}
+function scheduleRuntimeErrorCloudSave(){
+  clearTimeout(runtimeErrorCloudTimer);
+  runtimeErrorCloudTimer=setTimeout(()=>pushRuntimeErrorsToCloud(),600);
+}
 function updateRuntimeErrorPanel(){
   const state=document.getElementById('runtimeErrorState'), list=document.getElementById('runtimeErrorList');
   const rows=[...runtimeDisplayErrorMap.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.name).localeCompare(String(b.name)));
@@ -1309,7 +1362,7 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momentoまとめ直し完了（grouped-v10）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momentoまとめ直し完了（grouped-v13）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 
 function rawMomentoMediaRefsByDate(filename,text){
