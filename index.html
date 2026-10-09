@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v6</title>
+<title>Days — grouped-v7</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -25,7 +25,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v6</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v7</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -107,6 +107,12 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
             <button id="momentoClearHiddenBtn" type="button">非表示を解除</button>
           </div>
           <div id="momentoAuditState" style="margin-top:7px;color:#666;line-height:1.55">未点検</div>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e1d8cf">
+            <div style="font-weight:800;font-size:13px;margin-bottom:6px">Momento TXT → Diary 紐付け監査</div>
+            <div style="color:#777;margin-bottom:8px;line-height:1.55">元の text.zip に書かれた Media と、現在のDiaryに保存された写真名を日付ごとに照合します。データは変更しません。</div>
+            <label style="display:block;margin:0">text.zipを選んで監査 <input id="momentoLinkAuditZip" type="file" accept=".zip" /></label>
+            <div id="momentoLinkAuditResult" style="margin-top:8px;color:#666;line-height:1.55;white-space:normal"></div>
+          </div>
         </div>
       </div>
       <div class="actions"><button id="exportBtn">バックアップを書き出す</button><button id="clearBtn" class="danger">試作データを全削除</button></div>
@@ -867,8 +873,66 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momentoまとめ直し完了（grouped-v6）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momentoまとめ直し完了（grouped-v7）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
+
+function rawMomentoMediaRefsByDate(filename,text){
+  const date=dateFromFilename(filename); if(!date)return null;
+  const lines=String(text||'').replace(/\r/g,'').split('\n');
+  const blocks=[]; let cur=null;
+  const flush=()=>{if(cur){blocks.push(cur);cur=null}};
+  for(const raw of lines){
+    const tm=raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if(tm){flush();cur={time:`${String(tm[1]).padStart(2,'0')}:${tm[2]}`,lines:[]};continue}
+    if(cur)cur.lines.push(raw.trimEnd());
+  }
+  flush();
+  const refs=[];
+  for(const b of blocks){
+    if(b.lines.some(x=>/^Feed\s*:/i.test(x.trim())))continue;
+    for(const raw of b.lines){
+      const m=raw.trim().match(/^Media\s*:\s*(.+)$/i);
+      if(m&&m[1].trim())refs.push(m[1].trim());
+    }
+  }
+  return {date,refs};
+}
+function countNames(arr){const m=new Map();for(const n of arr||[]){const k=String(n||'').trim();if(k)m.set(k,(m.get(k)||0)+1)}return m}
+function nameDiff(a,b){
+  const aa=countNames(a),bb=countNames(b),missing=[],extra=[];
+  for(const [n,c] of aa){const d=c-(bb.get(n)||0);for(let i=0;i<d;i++)missing.push(n)}
+  for(const [n,c] of bb){const d=c-(aa.get(n)||0);for(let i=0;i<d;i++)extra.push(n)}
+  return {missing,extra};
+}
+async function auditMomentoTextLinkage(file){
+  const box=document.getElementById('momentoLinkAuditResult'); if(box)box.innerHTML='text.zipを解析中…';
+  const zip=await JSZip.loadAsync(file); const rawByDate=new Map(); let rawTotal=0;
+  for(const [name,obj] of Object.entries(zip.files)){
+    if(obj.dir||!name.toLowerCase().endsWith('.txt'))continue;
+    const text=await obj.async('text'); const r=rawMomentoMediaRefsByDate(name,text); if(!r)continue;
+    if(!rawByDate.has(r.date))rawByDate.set(r.date,[]); rawByDate.get(r.date).push(...r.refs); rawTotal+=r.refs.length;
+  }
+  const entries=(await all('entries')).filter(e=>e.source==='Momento'); const diaryByDate=new Map(); let diaryTotal=0;
+  for(const e of entries){
+    if(!diaryByDate.has(e.date))diaryByDate.set(e.date,[]);
+    const refs=(e.attachmentNames||[]).map(x=>String(x||'').trim()).filter(Boolean);
+    diaryByDate.get(e.date).push(...refs); diaryTotal+=refs.length;
+  }
+  const dates=[...new Set([...rawByDate.keys(),...diaryByDate.keys()])].sort(); const bad=[];
+  for(const d of dates){const raw=rawByDate.get(d)||[],diary=diaryByDate.get(d)||[];const diff=nameDiff(raw,diary);if(diff.missing.length||diff.extra.length)bad.push({date:d,raw:raw.length,diary:diary.length,...diff})}
+  if(!box)return;
+  if(!bad.length){
+    box.innerHTML=`<b>紐付け一致 ✓</b><br>元TXTのMedia：${rawTotal}件 / Diaryの写真名：${diaryTotal}件 / 不一致日：0日<br><span style="color:#6c8b70">→ text.zipからDiaryへの写真名保存は一致しています。画面で欠けて見える写真は、TXTではなくDrive画像の取得・表示側を疑うのがよさそうです。</span>`;
+    return;
+  }
+  const rows=bad.slice(0,40).map(x=>{
+    const miss=x.missing.slice(0,8).map(n=>`<div style="overflow-wrap:anywhere;color:#a7463d">− ${esc(n)}</div>`).join('');
+    const extra=x.extra.slice(0,5).map(n=>`<div style="overflow-wrap:anywhere;color:#667">＋ ${esc(n)}</div>`).join('');
+    return `<div style="padding:8px 0;border-top:1px solid #e4ddd6"><b>${esc(x.date)}</b>：TXT ${x.raw}枚 / Diary ${x.diary}枚${x.missing.length?` / 欠落 ${x.missing.length}`:''}${x.extra.length?` / 余分 ${x.extra.length}`:''}${miss}${extra}</div>`;
+  }).join('');
+  box.innerHTML=`<b>紐付け不一致：${bad.length}日</b><br>元TXTのMedia：${rawTotal}件 / Diaryの写真名：${diaryTotal}件<br>${rows}${bad.length>40?`<div>…ほか ${bad.length-40}日</div>`:''}`;
+}
+
 async function importFacebookTxt(file){status('Facebookテキストを読み込み中…');const rows=parseFacebook(await file.text());for(const e of rows)await put('entries',e);status(`Facebook投稿を ${rows.length} 件取り込みました`);await render()}
 
 function formatBytes(bytes){
@@ -1025,6 +1089,7 @@ $('#momentoDriveUploadBtn')?.addEventListener('click',()=>uploadMomentoMatchedFi
 $('#momentoDrivePauseBtn')?.addEventListener('click',()=>{momentoUploadPaused=true;$('#momentoDrivePauseBtn').disabled=true;$('#momentoDriveResumeBtn').disabled=false;momentoDriveState('Momento写真：一時停止中')});
 $('#momentoDriveResumeBtn')?.addEventListener('click',()=>{momentoUploadPaused=false;$('#momentoDrivePauseBtn').disabled=false;$('#momentoDriveResumeBtn').disabled=true;momentoDriveState('Momento写真：再開しました')});
 $('#momentoAuditBtn')?.addEventListener('click',()=>runMomentoPhotoAudit().catch(err=>{momentoAuditState('点検エラー：'+err.message)}));
+$('#momentoLinkAuditZip')?.addEventListener('change',e=>e.target.files[0]&&auditMomentoTextLinkage(e.target.files[0]).catch(err=>{const x=document.getElementById('momentoLinkAuditResult');if(x)x.textContent='紐付け監査エラー：'+err.message;}));
 $('#momentoRepairBtn')?.addEventListener('click',()=>repairMomentoPhotos().catch(err=>{momentoAuditState('修復エラー：'+err.message)}));
 $('#momentoHideErrorsBtn')?.addEventListener('click',async()=>{
   let n=0; for(const name of driveDisplayErrors){const k=String(name||'').toLowerCase(); if(momentoDriveFilesByName.has(k)){hiddenMomentoPhotoNames.add(k);n++;}}
