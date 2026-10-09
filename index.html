@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v5</title>
+<title>Days — grouped-v6</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -25,7 +25,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v5</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v6</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -97,6 +97,17 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
         <div id="momentoDriveUploadProgress" style="margin-top:8px;color:#666">待機中</div>
         <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px"><div id="momentoDriveUploadBar" style="height:100%;width:0%;background:#56C3F0"></div></div>
         <div id="momentoDriveState" style="margin-top:7px;color:#888">Momento写真：未確認</div>
+        <div id="momentoAuditPanel" style="margin-top:10px;padding-top:10px;border-top:1px solid #e6dfd8">
+          <div style="font-weight:800;font-size:13px">Momento写真を一括点検</div>
+          <div style="color:#777;margin-top:3px">3992枚を名前・Drive上の存在・容量でまとめて点検します。attachmentフォルダを選んでいれば、異常分だけ再アップロードできます。</div>
+          <div class="actions" style="flex-wrap:wrap">
+            <button id="momentoAuditBtn" type="button">全写真を一括点検</button>
+            <button id="momentoRepairBtn" type="button" disabled>不足・異常だけ再アップロード</button>
+            <button id="momentoHideErrorsBtn" type="button">表示エラーを非表示</button>
+            <button id="momentoClearHiddenBtn" type="button">非表示を解除</button>
+          </div>
+          <div id="momentoAuditState" style="margin-top:7px;color:#666;line-height:1.55">未点検</div>
+        </div>
       </div>
       <div class="actions"><button id="exportBtn">バックアップを書き出す</button><button id="clearBtn" class="danger">試作データを全削除</button></div>
       <p id="status" class="status"></p>
@@ -487,6 +498,11 @@ const MOMENTO_DRIVE_FOLDER_NAME='kii-diary-momento-media-app';
 let momentoDriveFolderId='';
 let momentoDriveFilesByName=new Map();
 let momentoUploadPaused=false;
+let momentoLocalFilesByName=new Map();
+let momentoAuditRepairNames=[];
+const hiddenMomentoPhotoNames=new Set(JSON.parse(localStorage.getItem('kiiHiddenMomentoPhotos')||'[]'));
+function saveHiddenMomentoPhotoNames(){localStorage.setItem('kiiHiddenMomentoPhotos',JSON.stringify([...hiddenMomentoPhotoNames]));}
+function momentoAuditState(msg){const el=document.getElementById('momentoAuditState');if(el)el.textContent=msg;}
 let momentoUploadWakeLock=null;
 function momentoDriveState(msg){const el=document.getElementById('momentoDriveState');if(el)el.textContent=msg}
 function setMomentoUploadProgress(done,total,uploaded,skipped,failed,current=''){
@@ -528,6 +544,51 @@ async function refreshAllDrivePhotoIndexes(){
   driveState(`Drive写真：Facebook ${facebookCount}枚 / Momento ${momentoCount}ファイルを認識しました`);
 }
 async function listMomentoDriveExistingFiles(){ await loadMomentoDriveIndex(); return new Map(momentoDriveFilesByName); }
+async function getMomentoExpectedNames(){
+  const entries=(await all('entries')).filter(e=>e.source==='Momento');
+  const names=[]; for(const e of entries)for(const n of (e.attachmentNames||[]))if(n)names.push(String(n).trim());
+  return [...new Set(names)];
+}
+async function runMomentoPhotoAudit(){
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  momentoAuditState('全写真を点検中…');
+  await loadMomentoDriveIndex();
+  const expected=await getMomentoExpectedNames();
+  const missing=[],sizeMismatch=[],runtimeErrors=[];
+  for(const name of expected){
+    const key=name.toLowerCase(); const remote=momentoDriveFilesByName.get(key);
+    const local=momentoLocalFilesByName.get(key);
+    if(!remote){missing.push(name);continue;}
+    if(local && Number(remote.size||0)!==Number(local.size||0))sizeMismatch.push(name);
+    if(driveDisplayErrors.has(name))runtimeErrors.push(name);
+  }
+  const suspects=[...new Set([...missing,...sizeMismatch,...runtimeErrors])];
+  momentoAuditRepairNames=suspects.filter(n=>momentoLocalFilesByName.has(n.toLowerCase()));
+  const repairBtn=document.getElementById('momentoRepairBtn'); if(repairBtn)repairBtn.disabled=!momentoAuditRepairNames.length;
+  const localNote=momentoLocalFilesByName.size?` / attachment照合済み ${momentoLocalFilesByName.size}件`:' / attachment未選択（容量差チェックと再アップロードは不可）';
+  const sample=suspects.slice(0,8).join(' / ');
+  momentoAuditState(`期待 ${expected.length}件 / Drive ${momentoDriveFilesByName.size}件 / 不足 ${missing.length} / 容量不一致 ${sizeMismatch.length} / 表示エラー ${runtimeErrors.length}${localNote}${suspects.length?` / 要確認例：${sample}${suspects.length>8?' …':''}`:' / 異常なし ✓'}`);
+  return {expected,missing,sizeMismatch,runtimeErrors,suspects};
+}
+async function repairMomentoPhotos(){
+  if(!momentoAuditRepairNames.length){alert('再アップロード対象がありません。先に一括点検してね。');return;}
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  const names=[...momentoAuditRepairNames]; let ok=0,fail=0;
+  if(!confirm(`${names.length}件の不足・異常写真だけをDriveへ再アップロードしますか？`))return;
+  for(let i=0;i<names.length;i++){
+    const name=names[i], key=name.toLowerCase(), file=momentoLocalFilesByName.get(key);
+    if(!file){fail++;continue;}
+    momentoAuditState(`修復中 ${i+1}/${names.length}：${name}`);
+    try{
+      const old=momentoDriveFilesByName.get(key);
+      if(old?.id){try{await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(old.id)}`,{method:'DELETE'})}catch(e){console.warn('delete old failed',name,e)}}
+      await uploadOneMomentoFile(file); ok++;
+      driveDisplayErrors.delete(name);
+    }catch(e){console.warn('repair failed',name,e);fail++;}
+  }
+  await loadMomentoDriveIndex(); updateDriveErrorState();
+  momentoAuditState(`修復完了：${ok}件再アップロード / ${fail}件失敗。もう一度「全写真を一括点検」を押して確認してね。`);
+}
 async function uploadOneMomentoFile(file){
   await ensureMomentoDriveFolder();
   const boundary='kiiMomentoBoundary'+Math.random().toString(36).slice(2);
@@ -806,7 +867,7 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momentoまとめ直し完了（grouped-v3）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momentoまとめ直し完了（grouped-v6）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 async function importFacebookTxt(file){status('Facebookテキストを読み込み中…');const rows=parseFacebook(await file.text());for(const e of rows)await put('entries',e);status(`Facebook投稿を ${rows.length} 件取り込みました`);await render()}
 
@@ -831,6 +892,8 @@ async function analyzeMomentoAttachmentFolder(files){
     if(!byExact.has(base))byExact.set(base,f);
     const low=base.toLowerCase(); if(!byLower.has(low))byLower.set(low,f);
   }
+  momentoLocalFilesByName=new Map();
+  for(const f of files){const base=(f.name||'').split(/[\\/]/).pop(); if(base)momentoLocalFilesByName.set(base.toLowerCase(),f);}
   const matched=[],missing=[];
   let bytes=0,imageCount=0,otherCount=0;
   for(const n of uniqNames){
@@ -928,7 +991,7 @@ async function render(){
       const card=document.createElement('article'); card.className='moment'; card.dataset.id=e.id;
       const medias=[]; for(const mid of (e.mediaIds||[])){const m=await get('media',mid); if(m)medias.push(m)}
       const driveMedias=(e.source==='Facebook'?(drivePhotosByDate.get(e.date)||[]):[]);
-      const momentoDriveMedias=(e.source==='Momento'?(e.attachmentNames||[]).map(n=>momentoDriveFilesByName.get(String(n||'').toLowerCase())).filter(isDisplayableImageFile):[]);
+      const momentoDriveMedias=(e.source==='Momento'?(e.attachmentNames||[]).filter(n=>!hiddenMomentoPhotoNames.has(String(n||'').toLowerCase())).map(n=>momentoDriveFilesByName.get(String(n||'').toLowerCase())).filter(isDisplayableImageFile):[]);
       const remoteMedias=driveMedias.concat(momentoDriveMedias);
       const totalMedia=medias.length+remoteMedias.length;
       let hero='';
@@ -961,6 +1024,13 @@ $('#momentoAttachmentFolder').addEventListener('change',e=>e.target.files.length
 $('#momentoDriveUploadBtn')?.addEventListener('click',()=>uploadMomentoMatchedFiles().catch(err=>{releaseMomentoWakeLock();momentoDriveState('Momento写真：アップロードできませんでした');alert(err.message)}));
 $('#momentoDrivePauseBtn')?.addEventListener('click',()=>{momentoUploadPaused=true;$('#momentoDrivePauseBtn').disabled=true;$('#momentoDriveResumeBtn').disabled=false;momentoDriveState('Momento写真：一時停止中')});
 $('#momentoDriveResumeBtn')?.addEventListener('click',()=>{momentoUploadPaused=false;$('#momentoDrivePauseBtn').disabled=false;$('#momentoDriveResumeBtn').disabled=true;momentoDriveState('Momento写真：再開しました')});
+$('#momentoAuditBtn')?.addEventListener('click',()=>runMomentoPhotoAudit().catch(err=>{momentoAuditState('点検エラー：'+err.message)}));
+$('#momentoRepairBtn')?.addEventListener('click',()=>repairMomentoPhotos().catch(err=>{momentoAuditState('修復エラー：'+err.message)}));
+$('#momentoHideErrorsBtn')?.addEventListener('click',async()=>{
+  let n=0; for(const name of driveDisplayErrors){const k=String(name||'').toLowerCase(); if(momentoDriveFilesByName.has(k)){hiddenMomentoPhotoNames.add(k);n++;}}
+  saveHiddenMomentoPhotoNames(); await render(); momentoAuditState(n?`表示エラー ${n}件を非表示にしました。写真自体はDriveから削除していません。`:'現在、非表示にする表示エラーはありません。');
+});
+$('#momentoClearHiddenBtn')?.addEventListener('click',async()=>{hiddenMomentoPhotoNames.clear();saveHiddenMomentoPhotoNames();await render();momentoAuditState('非表示リストを解除しました。');});
 $('#facebookTxt').addEventListener('change',e=>e.target.files[0]&&importFacebookTxt(e.target.files[0]).catch(err=>status('エラー: '+err.message)));
 $('#facebookPhotos').addEventListener('change',e=>e.target.files.length&&importFacebookPhotos([...e.target.files]).catch(err=>status('エラー: '+err.message)));
 $('#search').addEventListener('input',()=>{focusedDate='';render()});$('#sourceFilter').addEventListener('change',render);$('#tagFilter').addEventListener('input',render);$('#favoriteOnly').addEventListener('change',render);$('#exportBtn').addEventListener('click',exportBackup);
