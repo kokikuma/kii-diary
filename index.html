@@ -85,11 +85,11 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
         <label>Facebook写真<input id="facebookPhotos" type="file" accept="image/*" multiple /></label>
       </div>
       <div id="momentoAttachmentCheckResult" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px solid #d8d0c8;border-radius:9px;background:#fff;font-size:12px;line-height:1.65;color:#5b554f"></div>
-      <div id="momentoDriveUploadPanel" class="hidden" style="margin-top:10px;background:#fff;border:1px solid #d8d0c8;border-radius:10px;padding:12px;font-size:12px;line-height:1.7">
+      <div id="momentoDriveUploadPanel" style="margin-top:10px;background:#fff;border:1px solid #d8d0c8;border-radius:10px;padding:12px;font-size:12px;line-height:1.7">
         <div style="font-weight:800;font-size:13px">Momento写真をGoogle Driveへ</div>
         <div style="color:#777;margin-top:3px">照合で見つかった必要ファイルだけを、Momento専用フォルダへ保存します。既存ファイルは自動スキップします。</div>
         <div class="actions" style="flex-wrap:wrap">
-          <button id="momentoDriveUploadBtn" type="button">必要ファイルをアップロード</button>
+          <button id="momentoDriveUploadBtn" type="button" disabled>attachment照合後にアップロード</button>
           <button id="momentoDrivePauseBtn" type="button" disabled>一時停止</button>
           <button id="momentoDriveResumeBtn" type="button" disabled>再開</button>
         </div>
@@ -444,7 +444,9 @@ async function uploadOneMomentoFile(file){
 async function requestMomentoWakeLock(){try{if('wakeLock' in navigator)momentoUploadWakeLock=await navigator.wakeLock.request('screen')}catch(e){console.warn(e)}}
 async function releaseMomentoWakeLock(){try{await momentoUploadWakeLock?.release()}catch{} momentoUploadWakeLock=null}
 async function uploadMomentoMatchedFiles(){
-  const files=[...(window.kiiMomentoAttachmentMatches||[])];
+  const selected=[...(window.kiiMomentoAttachmentMatches||[])];
+  if(!selected.length){alert('先に Momento attachment照合 でフォルダを選んでください。');return;}
+  const files=selected;
   if(!files.length)throw new Error('先にMomento attachment照合でフォルダを選んでね');
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
   const pause=document.getElementById('momentoDrivePauseBtn'), resume=document.getElementById('momentoDriveResumeBtn');
@@ -737,8 +739,7 @@ async function analyzeMomentoAttachmentFolder(files){
       `<div style="margin-top:7px;color:#888">※まだGoogle Driveにはアップロードしていません。容量確認だけです。</div>`;
   }
   window.kiiMomentoAttachmentMatches=matched.map(x=>x.file);
-  const up=document.getElementById('momentoDriveUploadPanel'); if(up)up.classList.toggle('hidden',!matched.length);
-  const upBtn=document.getElementById('momentoDriveUploadBtn'); if(upBtn)upBtn.textContent=`必要${matched.length}ファイルをアップロード`;
+  const upBtn=document.getElementById('momentoDriveUploadBtn'); if(upBtn){upBtn.disabled=!matched.length;upBtn.textContent=matched.length?`必要${matched.length}ファイルをアップロード`:'attachment照合後にアップロード';}
   status(`Momento attachment照合：必要 ${uniqNames.length}種類中 ${matched.length}件発見 / ${formatBytes(bytes)}${missing.length?` / 不足 ${missing.length}件`:''}`);
 }
 
