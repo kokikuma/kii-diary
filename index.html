@@ -78,6 +78,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
       <summary>データの取り込み・バックアップ</summary>
       <div class="import-grid">
         <label>Momento ZIP<input id="momentoZip" type="file" accept=".zip" /></label>
+        <label>Swarm差し替え（text.zip）<input id="swarmTextZip" type="file" accept=".zip" /></label>
         <label>Facebook.txt<input id="facebookTxt" type="file" accept=".txt,text/plain" /></label>
         <label>Facebook写真<input id="facebookPhotos" type="file" accept="image/*" multiple /></label>
       </div>
@@ -446,6 +447,84 @@ function parseMomentoText(filename,text){const date=dateFromFilename(filename);c
 
 async function importMomentoZip(file){status('Momento ZIPを読み込み中…');const zip=await JSZip.loadAsync(file);const mediaMap=new Map();for(const [name,obj] of Object.entries(zip.files)){if(obj.dir)continue;if(name.startsWith('Attachments/')){const blob=await obj.async('blob');mediaMap.set(name.split('/').pop(),{blob,name:name.split('/').pop()})}}
 let n=0;for(const [name,obj] of Object.entries(zip.files)){if(obj.dir||!name.toLowerCase().endsWith('.txt'))continue;const text=await obj.async('text');const e=parseMomentoText(name,text);if(!e.date)continue;for(const mn of e._mediaNames){const hit=mediaMap.get(mn);if(hit)e.mediaIds.push(await addMedia(hit.blob,hit.name,e.date,e.source))}delete e._mediaNames;await put('entries',e);n++}status(`Momento/Swarmを ${n} 件取り込みました`);await render()}
+
+function swarmStableId(date,time,url,place,text){
+  const raw=[date,time,url,place,text].join('|');
+  let h=2166136261;
+  for(let i=0;i<raw.length;i++){h^=raw.charCodeAt(i);h=Math.imul(h,16777619)}
+  return 'swarm_'+(h>>>0).toString(16).padStart(8,'0');
+}
+function parseMomentoSwarmEntries(filename,text){
+  const date=dateFromFilename(filename);
+  if(!date)return [];
+  const lines=String(text||'').replace(/\r/g,'').split('\n');
+  const blocks=[]; let cur=null;
+  const flush=()=>{if(cur){blocks.push(cur);cur=null}};
+  for(const raw of lines){
+    const line=raw.trimEnd();
+    const tm=line.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if(tm){flush();cur={time:`${String(tm[1]).padStart(2,'0')}:${tm[2]}`,lines:[]};continue}
+    if(cur)cur.lines.push(line);
+  }
+  flush();
+  const rows=[];
+  for(const b of blocks){
+    if(!b.lines.some(x=>/^Feed:\s*Swarm\b/i.test(x.trim())))continue;
+    let url='',place='',lat=null,lng=null; const body=[],tags=[];
+    for(const raw of b.lines){
+      const line=raw.trim();
+      if(/^Feed:\s*Swarm\b/i.test(line))continue;
+      if(/^URL:\s*/i.test(line)){url=line.replace(/^URL:\s*/i,'').trim();continue}
+      if(/^At:\s*/i.test(line)){
+        place=line.replace(/^At:\s*/i,'').trim();
+        const m=place.match(/\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)\s*$/);
+        if(m){lat=Number(m[1]);lng=Number(m[2]);place=place.slice(0,m.index).trim()}
+        continue;
+      }
+      if(/^Tags:\s*/i.test(line)){
+        tags.push(...line.replace(/^Tags:\s*/i,'').split(',').map(x=>x.trim()).filter(Boolean));continue;
+      }
+      if(/^Media:\s*/i.test(line))continue;
+      if(line)body.push(raw.trimEnd());
+    }
+    const textBody=body.join('\n').trim();
+    rows.push({
+      id:swarmStableId(date,b.time,url,place,textBody),date,time:b.time,text:textBody,
+      source:'Swarm',place,url,lat,lng,tags:[...new Set(['Swarm',...tags])],favorite:false,mediaIds:[]
+    });
+  }
+  return rows;
+}
+async function deleteRemoteSwarmEntries(){
+  if(!firebaseUser||!fbDb||!fbFns.getDocs)return 0;
+  const snap=await fbFns.getDocs(fbFns.collection(fbDb,'users',firebaseUser.uid,'entries'));
+  const refs=snap.docs.filter(d=>(d.data().source||'')==='Swarm').map(d=>d.ref);
+  let deleted=0;
+  for(let i=0;i<refs.length;i+=400){
+    const batch=fbFns.writeBatch(fbDb);
+    refs.slice(i,i+400).forEach(ref=>batch.delete(ref));
+    await batch.commit(); deleted+=Math.min(400,refs.length-i);
+  }
+  return deleted;
+}
+async function importSwarmTextZip(file){
+  if(!confirm('今あるSwarm記録を削除して、Momentoのtext.zip内のSwarmに差し替えますか？\nFacebookや日記など他の記録は削除しません。'))return;
+  status('Swarmを差し替え中… text.zipを解析しています');
+  const zip=await JSZip.loadAsync(file); const rows=[];
+  for(const [name,obj] of Object.entries(zip.files)){
+    if(obj.dir||!name.toLowerCase().endsWith('.txt'))continue;
+    const text=await obj.async('text'); rows.push(...parseMomentoSwarmEntries(name,text));
+  }
+  const uniq=new Map(rows.map(r=>[r.id,r]));
+  const old=(await all('entries')).filter(e=>e.source==='Swarm');
+  for(const e of old)await del('entries',e.id);
+  let remoteDeleted=0;
+  try{remoteDeleted=await deleteRemoteSwarmEntries()}catch(err){console.warn('Google上の旧Swarm削除に失敗',err)}
+  for(const e of uniq.values())await put('entries',e);
+  await render();
+  const remoteMsg=firebaseUser?` / Google上の旧Swarm ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
+  status(`Swarm差し替え完了：旧 ${old.length}件削除 → ${uniq.size}件取り込み${remoteMsg}。Google同期中なら「この端末 → Google」を押してね。`);
+}
 async function importFacebookTxt(file){status('Facebookテキストを読み込み中…');const rows=parseFacebook(await file.text());for(const e of rows)await put('entries',e);status(`Facebook投稿を ${rows.length} 件取り込みました`);await render()}
 async function importFacebookPhotos(files){status(`Facebook写真 ${files.length} 枚を整理中…`);const entries=await all('entries');const byDate=new Map(entries.filter(e=>e.source==='Facebook').map(e=>[e.date,e]));let linked=0,orphan=0;for(const f of files){const d=dateFromFilename(f.name);if(!d){orphan++;continue}let e=byDate.get(d);if(!e){e={id:uid(),date:d,time:'',text:'',source:'Facebook',tags:['Facebook'],favorite:false,mediaIds:[]};byDate.set(d,e)}const mid=await addMedia(f,f.name,d,'Facebook');e.mediaIds=e.mediaIds||[];e.mediaIds.push(mid);await put('entries',e);linked++}status(`Facebook写真 ${linked} 枚を日付で紐付けました${orphan?`（判定できず ${orphan} 枚）`:''}`);await render()}
 
@@ -524,6 +603,7 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 async function exportBackup(){status('バックアップ作成中…');const entries=await all('entries'), medias=await all('media');const zip=new JSZip();zip.file('entries.json',JSON.stringify(entries.map(e=>({...e})),null,2));for(const m of medias)zip.file(`media/${m.id}_${m.name}`,m.blob);const blob=await zip.generateAsync({type:'blob'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`watashi-no-kiroku-backup-${new Date().toISOString().slice(0,10)}.zip`;a.click();status('バックアップを書き出しました')}
 
 $('#momentoZip').addEventListener('change',e=>e.target.files[0]&&importMomentoZip(e.target.files[0]).catch(err=>status('エラー: '+err.message)));
+$('#swarmTextZip').addEventListener('change',e=>e.target.files[0]&&importSwarmTextZip(e.target.files[0]).catch(err=>status('Swarm差し替えエラー: '+err.message)));
 $('#facebookTxt').addEventListener('change',e=>e.target.files[0]&&importFacebookTxt(e.target.files[0]).catch(err=>status('エラー: '+err.message)));
 $('#facebookPhotos').addEventListener('change',e=>e.target.files.length&&importFacebookPhotos([...e.target.files]).catch(err=>status('エラー: '+err.message)));
 $('#search').addEventListener('input',()=>{focusedDate='';render()});$('#sourceFilter').addEventListener('change',render);$('#tagFilter').addEventListener('input',render);$('#favoriteOnly').addEventListener('change',render);$('#exportBtn').addEventListener('click',exportBackup);
