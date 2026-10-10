@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v17</title>
+<title>Days — grouped-v18</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -25,7 +25,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v17</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v18</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -113,10 +113,17 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
           <div id="runtimeErrorCloudState" style="margin-top:4px;color:#999;font-size:12px;line-height:1.45">Google保存：ログイン後に同期します</div>
           <div id="runtimeErrorRepairState" style="margin-top:4px;color:#777;font-size:12px;line-height:1.45">再アップロードする時だけ、上のattachmentフォルダを選んでください。</div>
           <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #d8d0c8">
-            <div style="font-weight:800;font-size:12px">1枚だけ完全差し替えテスト</div>
-            <div style="color:#777;margin-top:2px">2020/01/01で欠けていた B2DF…jpg だけを、安全確認してから新しいDriveファイルへ入れ替えます。</div>
-            <div class="actions" style="margin-top:7px"><button id="singlePhotoSwapTestBtn" type="button">B2DF…jpg を1枚だけ差し替える</button></div>
-            <div id="singlePhotoSwapTestState" style="margin-top:6px;color:#777;line-height:1.5">未実行</div>
+            <div style="font-weight:800;font-size:12px">attachmentフォルダ内の壊れ画像をまとめて直す</div>
+            <div style="color:#777;margin-top:2px">PCのattachmentフォルダをブラウザで実際に読めるか全件確認します。壊れている画像だけを一覧化し、Windowsでまとめて正常画像へ保存し直せます。</div>
+            <div class="actions" style="margin-top:7px;flex-wrap:wrap">
+              <button id="localBadScanBtn" type="button">フォルダ全体を検査</button>
+              <button id="localRepairCmdBtn" type="button">Windows修復ファイルを作る</button>
+              <button id="bulkDriveSwapBtn" type="button">修復済み画像をDriveへ差し替え</button>
+              <button id="localBadScanStopBtn" type="button">検査を中止</button>
+            </div>
+            <div id="localBadScanState" style="margin-top:6px;color:#777;line-height:1.5">未検査</div>
+            <div id="localBadScanProgress" style="height:7px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px"><div id="localBadScanBar" style="height:100%;width:0%;background:#56C3F0"></div></div>
+            <details style="margin-top:7px"><summary style="cursor:pointer;color:#666">検出した壊れ画像の一覧</summary><div id="localBadScanList" style="margin-top:7px;color:#666;line-height:1.5;white-space:pre-wrap"></div></details>
           </div>
           <details id="runtimeErrorDetails" style="margin-top:8px">
             <summary style="cursor:pointer;color:#666">エラー写真の一覧を見る</summary>
@@ -1107,6 +1114,90 @@ async function runSinglePhotoSwapTest(){
   }finally{if(btn)btn.disabled=false;}
 }
 
+
+const LOCAL_BAD_KEY='kii_v18_local_bad_images';
+const LOCAL_SWAP_KEY='kii_v18_local_swap_progress';
+let localBadScanCancelled=false;
+function getLocalBadNames(){try{return JSON.parse(localStorage.getItem(LOCAL_BAD_KEY)||'[]')}catch{return []}}
+function saveLocalBadNames(a){localStorage.setItem(LOCAL_BAD_KEY,JSON.stringify([...new Set((a||[]).map(String))]));refreshLocalBadScanUI()}
+function refreshLocalBadScanUI(){
+  const a=getLocalBadNames(), list=document.getElementById('localBadScanList'), st=document.getElementById('localBadScanState');
+  if(list)list.textContent=a.length?a.map((n,i)=>`${i+1}. ${n}`).join('\n'):'まだありません。';
+  if(st && !/検査中|Driveへ差し替え中/.test(st.textContent||''))st.textContent=a.length?`壊れ画像リスト：${a.length}件（このリストはPCに保存済み）`:'未検査';
+}
+function setLocalScanProgress(done,total,bad,current=''){
+  const bar=document.getElementById('localBadScanBar'),st=document.getElementById('localBadScanState');
+  if(bar)bar.style.width=`${total?Math.round(done/total*100):0}%`;
+  if(st)st.textContent=`検査中… ${done}/${total} / 壊れ ${bad}${current?` / ${current}`:''}`;
+}
+async function scanAttachmentFolderForBrokenImages(){
+  if(!momentoLocalFilesByName.size)throw new Error('先に「修復用 attachmentフォルダ」を選んでね');
+  const files=[...momentoLocalFilesByName.values()].filter(f=>isDisplayableImageFile({name:f.name,mimeType:f.type}));
+  if(!files.length)throw new Error('画像ファイルが見つかりません');
+  localBadScanCancelled=false;
+  const bad=[]; let done=0; const q=[...files];
+  setLocalScanProgress(0,files.length,0);
+  const worker=async()=>{
+    while(q.length&&!localBadScanCancelled){
+      const f=q.shift(); if(!f)break;
+      try{await decodeImageBlobForAudit(f,f.name)}catch{bad.push(f.name)}
+      done++; if(done%5===0||done===files.length)setLocalScanProgress(done,files.length,bad.length,f.name);
+      if(done%25===0)await new Promise(r=>setTimeout(r,0));
+    }
+  };
+  await Promise.all(Array.from({length:6},worker));
+  if(localBadScanCancelled){
+    const st=document.getElementById('localBadScanState'); if(st)st.textContent=`中止しました：${done}/${files.length}まで確認 / 壊れ ${bad.length}`;
+    return;
+  }
+  saveLocalBadNames(bad);
+  const st=document.getElementById('localBadScanState'); if(st)st.textContent=`検査完了 ✓ 画像 ${files.length}件中、ブラウザで読めない画像 ${bad.length}件`;
+  const bar=document.getElementById('localBadScanBar'); if(bar)bar.style.width='100%';
+}
+function psQuote(s){return "'"+String(s).replace(/'/g,"''")+"'"}
+function downloadWindowsRepairCmd(){
+  const names=getLocalBadNames();
+  if(!names.length)throw new Error('先にフォルダ全体を検査して、壊れ画像を検出してね');
+  const arr=names.map(psQuote).join(',');
+  const ps=`Add-Type -AssemblyName System.Windows.Forms\nAdd-Type -AssemblyName System.Drawing\n$names=@(${arr})\n$dlg=New-Object System.Windows.Forms.FolderBrowserDialog\n$dlg.Description='Momento の Attachments フォルダを選んでください'\nif($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK){exit}\n$root=$dlg.SelectedPath\n$backup=Join-Path $root ('kii_original_broken_backup_'+(Get-Date -Format 'yyyyMMdd_HHmmss'))\nNew-Item -ItemType Directory -Path $backup -Force | Out-Null\n$ok=0;$fail=0;$failed=@()\n$jpegCodec=[System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object {$_.MimeType -eq 'image/jpeg'} | Select-Object -First 1\nforeach($name in $names){\n  $path=Join-Path $root $name\n  if(!(Test-Path -LiteralPath $path)){ $fail++; $failed += ($name+' : file not found'); continue }\n  $tmp=$path+'.kii_tmp'\n  try{\n    Copy-Item -LiteralPath $path -Destination (Join-Path $backup $name) -Force\n    $img=[System.Drawing.Image]::FromFile($path)\n    try{\n      $orientation=1\n      try{ $pi=$img.GetPropertyItem(274); if($pi -and $pi.Value.Length -ge 2){$orientation=[BitConverter]::ToUInt16($pi.Value,0)} }catch{}\n      $bmp=New-Object System.Drawing.Bitmap $img\n      switch($orientation){\n        2 {$bmp.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX)}\n        3 {$bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone)}\n        4 {$bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipX)}\n        5 {$bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipX)}\n        6 {$bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone)}\n        7 {$bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipX)}\n        8 {$bmp.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone)}\n      }\n    }finally{$img.Dispose()}\n    try{\n      $ext=[IO.Path]::GetExtension($path).ToLowerInvariant()\n      if($ext -eq '.jpg' -or $ext -eq '.jpeg'){\n        $ep=New-Object System.Drawing.Imaging.EncoderParameters 1\n        $ep.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality,95L)\n        $bmp.Save($tmp,$jpegCodec,$ep);$ep.Dispose()\n      }elseif($ext -eq '.png'){$bmp.Save($tmp,[System.Drawing.Imaging.ImageFormat]::Png)\n      }elseif($ext -eq '.bmp'){$bmp.Save($tmp,[System.Drawing.Imaging.ImageFormat]::Bmp)\n      }elseif($ext -eq '.gif'){$bmp.Save($tmp,[System.Drawing.Imaging.ImageFormat]::Gif)\n      }elseif($ext -eq '.tif' -or $ext -eq '.tiff'){$bmp.Save($tmp,[System.Drawing.Imaging.ImageFormat]::Tiff)\n      }else{throw 'unsupported extension'}\n    }finally{$bmp.Dispose()}\n    Move-Item -LiteralPath $tmp -Destination $path -Force\n    $ok++\n  }catch{\n    if(Test-Path -LiteralPath $tmp){Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue}\n    $fail++;$failed += ($name+' : '+$_.Exception.Message)\n  }\n}\nif($failed.Count -gt 0){$failed | Set-Content -LiteralPath (Join-Path $root 'kii_repair_failed.txt') -Encoding UTF8}\n[System.Windows.Forms.MessageBox]::Show(('修復完了：'+$ok+'件 / 失敗：'+$fail+'件`n元画像バックアップ：'+$backup),'Kii Diary 画像修復') | Out-Null\n`;
+  const bytes=new TextEncoder().encode(ps);
+  let b64=''; for(let i=0;i<bytes.length;i+=0x8000)b64+=String.fromCharCode(...bytes.subarray(i,i+0x8000)); b64=btoa(b64);
+  const cmd=`@echo off\r\nchcp 65001 >nul\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$b=[Convert]::FromBase64String('${b64}');$s=[Text.Encoding]::UTF8.GetString($b);Invoke-Expression $s"\r\npause\r\n`;
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([cmd],{type:'application/octet-stream'}));a.download='kii-repair-broken-momento-images.cmd';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  const st=document.getElementById('localBadScanState'); if(st)st.textContent=`Windows修復ファイルを作りました。ダウンロードした .cmd をダブルクリック → Attachmentsフォルダを選択。対象 ${names.length}件。`;
+}
+function loadBulkSwapProgress(){try{return JSON.parse(localStorage.getItem(LOCAL_SWAP_KEY)||'null')}catch{return null}}
+function saveBulkSwapProgress(v){localStorage.setItem(LOCAL_SWAP_KEY,JSON.stringify(v))}
+async function bulkSwapFixedImagesToDrive(){
+  const names=getLocalBadNames(); if(!names.length)throw new Error('修復対象リストがありません');
+  if(!momentoLocalFilesByName.size)throw new Error('Windows修復後、もう一度「修復用 attachmentフォルダ」を選び直してね');
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  let cp=loadBulkSwapProgress(); if(!cp||cp.sourceCount!==names.length)cp={sourceCount:names.length,done:{},failed:{}};
+  await ensureMomentoDriveFolder(); await loadMomentoDriveIndex();
+  const st=document.getElementById('localBadScanState'); let done=Object.keys(cp.done).length, ok=Object.values(cp.done).filter(Boolean).length;
+  for(const name of names){
+    const key=name.toLowerCase(); if(cp.done[key])continue;
+    const local=momentoLocalFilesByName.get(key); if(!local){cp.failed[key]='PCで見つからない';saveBulkSwapProgress(cp);continue}
+    try{await decodeImageBlobForAudit(local,name)}catch(e){cp.failed[key]='まだ画像が壊れている';saveBulkSwapProgress(cp);continue}
+    try{
+      if(st)st.textContent=`Driveへ差し替え中… ${done+1}/${names.length} / 成功 ${ok} / ${name}`;
+      const old=momentoDriveFilesByName.get(key)||null;
+      const tempName=`${name}.kii-fixed-${Date.now()}`;
+      const tempFile=new File([local],tempName,{type:local.type||guessImageMime(name,'image/jpeg'),lastModified:Date.now()});
+      const temp=await uploadOneMomentoFile(tempFile); if(!temp?.id)throw new Error('新規アップロード失敗');
+      await fetchAndDecodeDrivePhoto(temp.id,name);
+      if(old?.id){await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(old.id)}`,{method:'DELETE'});clearDriveBlobCache(old.id)}
+      await renameDriveFile(temp.id,name); clearDriveBlobCache(temp.id);
+      await fetchAndDecodeDrivePhoto(temp.id,name);
+      cp.done[key]=true; delete cp.failed[key]; ok++; done++; saveBulkSwapProgress(cp);
+      momentoDriveFilesByName.set(key,{id:temp.id,name,size:String(local.size||''),mimeType:guessImageMime(name,local.type)});
+    }catch(e){cp.failed[key]=String(e?.message||e);done++;saveBulkSwapProgress(cp)}
+  }
+  const failed=Object.keys(cp.failed).length;
+  if(st)st.textContent=`Drive差し替え完了：成功 ${ok}件 / 未修復・失敗 ${failed}件。${failed?'失敗分は一覧を確認して再実行できます。':'すべて完了 ✓'}`;
+  await loadMomentoDriveIndex(); await render();
+}
+
 async function repairRuntimeErrorPhotos(){
   const state=document.getElementById('runtimeErrorRepairState');
   const rows=[...runtimeDisplayErrorMap.values()];
@@ -1714,7 +1805,11 @@ $('#swarmTextZip').addEventListener('change',e=>e.target.files[0]&&importSwarmTe
 $('#momentoTextZip').addEventListener('change',e=>e.target.files[0]&&importMomentoTextZip(e.target.files[0]).catch(err=>status('Momento日記差し替えエラー: '+err.message)));
 $('#momentoAttachmentFolder').addEventListener('change',e=>e.target.files.length&&analyzeMomentoAttachmentFolder([...e.target.files]).catch(err=>status('Momento attachment照合エラー: '+err.message)));
 $('#runtimeErrorRepairBtn')?.addEventListener('click',()=>repairRuntimeErrorPhotos().catch(err=>{const x=document.getElementById('runtimeErrorRepairState');if(x)x.textContent='エラー写真の再アップロードに失敗：'+err.message;alert(err.message)}));
-$('#singlePhotoSwapTestBtn')?.addEventListener('click',()=>runSinglePhotoSwapTest().catch(err=>alert(err.message)));
+$('#localBadScanBtn')?.addEventListener('click',()=>scanAttachmentFolderForBrokenImages().catch(err=>alert(err.message)));
+$('#localBadScanStopBtn')?.addEventListener('click',()=>{localBadScanCancelled=true;});
+$('#localRepairCmdBtn')?.addEventListener('click',()=>{try{downloadWindowsRepairCmd()}catch(err){alert(err.message)}});
+$('#bulkDriveSwapBtn')?.addEventListener('click',()=>bulkSwapFixedImagesToDrive().catch(err=>alert(err.message)));
+refreshLocalBadScanUI();
 $('#runtimeErrorHideBtn')?.addEventListener('click',async()=>{
   let n=0;for(const x of runtimeDisplayErrorMap.values()){const k=String(x.name||'').toLowerCase();if(momentoDriveFilesByName.has(k)){hiddenMomentoPhotoNames.add(k);n++;}}
   saveHiddenMomentoPhotoNames();await render();updateRuntimeErrorPanel();momentoAuditState(n?`実画面で確認された表示エラー ${n}件を非表示にしました。Driveの写真自体は削除していません。`:'非表示にする実画面エラーはありません。');
