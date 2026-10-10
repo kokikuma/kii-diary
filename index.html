@@ -3,115 +3,135 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Kii Diary HEIC判定</title>
+<title>Kii Diary — Momento写真ローカル検査</title>
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic",sans-serif;background:#f7f7f7;color:#222;margin:0;padding:24px}
-.wrap{max-width:820px;margin:auto}
-.card{background:white;border-radius:16px;padding:20px;box-shadow:0 2px 12px rgba(0,0,0,.08);margin-bottom:16px}
-button{border:0;border-radius:10px;padding:12px 18px;background:#56C3F0;color:#fff;font-weight:700;cursor:pointer}
-button:disabled{opacity:.4;cursor:not-allowed}
-.muted{color:#666;font-size:14px}
-.big{font-size:30px;font-weight:800}
-pre{white-space:pre-wrap;word-break:break-word;background:#f3f3f3;padding:12px;border-radius:10px;max-height:360px;overflow:auto}
-.row{display:flex;gap:12px;flex-wrap:wrap}
-.stat{flex:1;min-width:150px;background:#fafafa;border-radius:12px;padding:14px}
+:root{--blue:#56c3f0;--ink:#302b27;--muted:#827970;--bg:#f5f1ed;--card:#fff;--line:#ddd4cc;--bad:#ad463d;--ok:#4f8256}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:"Yu Gothic","Hiragino Kaku Gothic ProN",sans-serif;color:var(--ink)}
+header{background:var(--blue);color:#fff;padding:18px 20px;font-size:24px;font-weight:800;position:sticky;top:0;z-index:3}header small{font-size:12px;opacity:.8;margin-left:8px}
+main{max-width:920px;margin:auto;padding:18px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;margin-bottom:16px}
+h2{margin:0 0 10px;font-size:20px}.note{color:var(--muted);line-height:1.7}.btn{border:0;border-radius:12px;background:#4a433d;color:#fff;font-weight:800;font-size:16px;padding:13px 17px;cursor:pointer;margin:5px 7px 5px 0}.btn:disabled{opacity:.45;cursor:not-allowed}.btn.secondary{background:#766d65}.btn.danger{background:#a7463d}
+.pick{display:block;border:1px dashed #cfc4bb;border-radius:12px;padding:15px;margin:12px 0}.progress{height:12px;background:#eee;border-radius:999px;overflow:hidden;margin:14px 0}.bar{height:100%;width:0;background:var(--blue);transition:width .15s}.status{font-size:15px;line-height:1.7}.ok{color:var(--ok);font-weight:800}.bad{color:var(--bad);font-weight:800}.list{max-height:330px;overflow:auto;border-top:1px solid var(--line);margin-top:12px;padding-top:8px}.row{font-size:13px;padding:5px 0;overflow-wrap:anywhere;border-bottom:1px solid #f0ebe7}.hidden{display:none}.big{font-size:18px;font-weight:800}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="card">
-    <h2>Momento画像 実体判定</h2>
-    <p class="muted">Attachments または kii_unreadable フォルダを選ぶと、拡張子ではなくファイルの中身を見て HEIC / JPEG / PNG / その他 を数えます。ファイルは変更しません。</p>
-    <input id="picker" type="file" webkitdirectory multiple>
-    <div style="margin-top:12px"><button id="run" disabled>フォルダ全体を判定</button></div>
-    <p id="status" class="muted"></p>
-  </div>
-
-  <div class="card" id="result" style="display:none">
-    <div class="row">
-      <div class="stat"><div class="muted">総ファイル</div><div id="total" class="big">0</div></div>
-      <div class="stat"><div class="muted">HEIC/HEIF実体</div><div id="heic" class="big">0</div></div>
-      <div class="stat"><div class="muted">JPEG実体</div><div id="jpeg" class="big">0</div></div>
-      <div class="stat"><div class="muted">PNG実体</div><div id="png" class="big">0</div></div>
-      <div class="stat"><div class="muted">その他/不明</div><div id="other" class="big">0</div></div>
-    </div>
-    <h3>.jpg なのに中身がHEIC</h3>
-    <p class="muted">今回いちばん疑っているパターンです。</p>
-    <div class="big" id="misnamed">0</div>
-    <button id="saveList" disabled style="margin-top:10px">HEIC実体の一覧を保存</button>
-    <pre id="list"></pre>
-  </div>
+<header>Momento写真 ローカル検査 <small>standalone-v4-copy</small></header>
+<main>
+<section class="card">
+<h2>Driveには接続しません</h2>
+<div class="note">これはDiary本体とは別の検査ページです。Google Drive・Firebase・日記データには触れません。PCのAttachmentsフォルダ内の画像を、Diaryと同じブラウザ表示方式でチェックするだけです。</div>
+<label class="pick">Attachmentsフォルダを選ぶ<br><input id="folder" type="file" webkitdirectory multiple></label>
+<div id="picked" class="status">未選択</div>
+<button id="scan" class="btn" disabled>フォルダ全体を検査</button>
+<button id="stop" class="btn secondary" disabled>中止</button>
+<div class="progress"><div id="bar" class="bar"></div></div>
+<div id="status" class="status">待機中</div>
+</section>
+<section id="resultCard" class="card hidden">
+<h2>検査結果</h2>
+<div id="summary" class="big"></div>
+<div class="note" style="margin-top:8px">「読めない画像」は、Chromeで実際に画像として表示できなかったファイルです。Driveの問題ではなく、元ファイル側の修復候補です。</div>
+<div style="margin-top:12px">
+<button id="downloadList" class="btn secondary" disabled>読めない画像一覧を保存</button>
+<button id="copyBad" class="btn" disabled>読めない画像を別フォルダへコピー</button>
+<button id="makeRepair" class="btn secondary" disabled>Windows一括修復ファイルを作る（旧方式）</button>
 </div>
+<div id="repairNote" class="note"></div>
+<details id="badDetails" class="hidden" open><summary>読めない画像の一覧</summary><div id="badList" class="list"></div></details>
+</section>
+<section class="card">
+<h2>このページの役割</h2>
+<div class="note">① 全3992ファイルから「ブラウザで読めない画像」だけを特定 → ② その画像だけ別フォルダへコピー → ③ PhotoshopでまとめてJPEG保存し直す → ④ 修復後にDiaryへ戻り、修復した画像だけDriveへ差し替える、という流れです。元Attachmentsはコピー時点では変更しません。</div>
+</section>
+</main>
 <script>
-const picker=document.getElementById('picker');
-const run=document.getElementById('run');
-const status=document.getElementById('status');
-const result=document.getElementById('result');
-const listEl=document.getElementById('list');
-const saveList=document.getElementById('saveList');
-let files=[], heicNames=[];
-
-picker.addEventListener('change',()=>{
-  files=[...picker.files];
-  run.disabled=!files.length;
-  status.textContent=files.length?`${files.length}ファイルを選択しました`:'';
+const folder=document.getElementById('folder'), scanBtn=document.getElementById('scan'), stopBtn=document.getElementById('stop');
+const picked=document.getElementById('picked'), statusEl=document.getElementById('status'), bar=document.getElementById('bar');
+const resultCard=document.getElementById('resultCard'), summary=document.getElementById('summary'), badList=document.getElementById('badList'), badDetails=document.getElementById('badDetails');
+const downloadList=document.getElementById('downloadList'), copyBad=document.getElementById('copyBad'), makeRepair=document.getElementById('makeRepair'), repairNote=document.getElementById('repairNote');
+let files=[], bad=[], stopped=false;
+const imageExt=/\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif)$/i;
+folder.addEventListener('change',()=>{
+ files=[...folder.files]; bad=[]; stopped=false; bar.style.width='0%'; resultCard.classList.add('hidden');
+ const imgs=files.filter(f=>imageExt.test(f.name)); picked.textContent=`${files.length}ファイルを選択（画像候補 ${imgs.length}件）`;
+ scanBtn.disabled=!imgs.length; stopBtn.disabled=true; statusEl.textContent='準備OK。Driveには接続していません。';
+});
+function canImg(file){return new Promise(resolve=>{
+ const url=URL.createObjectURL(file); const img=new Image(); let done=false;
+ const finish=v=>{if(done)return;done=true;URL.revokeObjectURL(url);resolve(v)};
+ img.onload=()=>finish(true); img.onerror=()=>finish(false); img.src=url;
+ setTimeout(()=>finish(false),12000);
+});}
+scanBtn.addEventListener('click',async()=>{
+ const imgs=files.filter(f=>imageExt.test(f.name)); if(!imgs.length)return;
+ bad=[];stopped=false;scanBtn.disabled=true;stopBtn.disabled=false;statusEl.textContent='検査中…';
+ let next=0,done=0; const concurrency=8;
+ async function worker(){while(!stopped){const i=next++;if(i>=imgs.length)return;const f=imgs[i];const ok=await canImg(f);if(!ok)bad.push(f.name);done++;bar.style.width=`${(done/imgs.length)*100}%`;if(done%20===0||done===imgs.length)statusEl.textContent=`${done} / ${imgs.length}（読めない ${bad.length}）`;}}
+ await Promise.all(Array.from({length:concurrency},worker));
+ stopBtn.disabled=true;scanBtn.disabled=false;resultCard.classList.remove('hidden');
+ if(stopped){statusEl.textContent=`中止しました：${done} / ${imgs.length}（ここまでで読めない ${bad.length}）`;}
+ else statusEl.textContent=`完了：${imgs.length}件を検査`;
+ summary.innerHTML=bad.length?`画像 ${imgs.length}件中、<span class="bad">読めない ${bad.length}件</span>`:`画像 ${imgs.length}件、<span class="ok">すべてブラウザで表示可能 ✓</span>`;
+ badList.innerHTML=bad.map((n,i)=>`<div class="row">${i+1}. ${n.replace(/[&<>]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[s]))}</div>`).join('');
+ badDetails.classList.toggle('hidden',!bad.length);downloadList.disabled=!bad.length;copyBad.disabled=!bad.length;makeRepair.disabled=!bad.length;
+ repairNote.textContent=bad.length?'次は「読めない画像を別フォルダへコピー」で、この一覧だけを安全にコピーできます。元Attachmentsは変更しません。':'修復は不要です。';
+});
+stopBtn.addEventListener('click',()=>{stopped=true;stopBtn.disabled=true;statusEl.textContent+=' → 中止処理中…'});
+downloadList.addEventListener('click',()=>{
+ const blob=new Blob([bad.join('\r\n')+'\r\n'],{type:'text/plain;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='kii_momento_unreadable_images.txt';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 });
 
-function classify(bytes){
-  if(bytes.length>=12){
-    // JPEG
-    if(bytes[0]===0xFF && bytes[1]===0xD8 && bytes[2]===0xFF) return 'jpeg';
-    // PNG
-    if(bytes[0]===0x89 && bytes[1]===0x50 && bytes[2]===0x4E && bytes[3]===0x47 &&
-       bytes[4]===0x0D && bytes[5]===0x0A && bytes[6]===0x1A && bytes[7]===0x0A) return 'png';
-    // ISO BMFF / HEIF family: bytes 4..7 = ftyp
-    if(bytes[4]===0x66 && bytes[5]===0x74 && bytes[6]===0x79 && bytes[7]===0x70){
-      const brand=String.fromCharCode(...bytes.slice(8,12)).toLowerCase();
-      const heifBrands=['heic','heix','hevc','hevx','heim','heis','hevm','hevs','mif1','msf1'];
-      if(heifBrands.includes(brand)) return 'heic';
-    }
-  }
-  return 'other';
-}
-
-run.addEventListener('click',async()=>{
-  run.disabled=true; saveList.disabled=true;
-  let c={heic:0,jpeg:0,png:0,other:0}, mis=0;
-  heicNames=[];
-  for(let i=0;i<files.length;i++){
-    const f=files[i];
-    try{
-      const buf=await f.slice(0,64).arrayBuffer();
-      const kind=classify(new Uint8Array(buf));
-      c[kind]++;
-      if(kind==='heic'){
-        heicNames.push(f.webkitRelativePath||f.name);
-        if(/\.(jpe?g)$/i.test(f.name)) mis++;
-      }
-    }catch(e){c.other++}
-    if(i%25===0||i===files.length-1) status.textContent=`判定中… ${i+1} / ${files.length}`;
-  }
-  document.getElementById('total').textContent=files.length;
-  document.getElementById('heic').textContent=c.heic;
-  document.getElementById('jpeg').textContent=c.jpeg;
-  document.getElementById('png').textContent=c.png;
-  document.getElementById('other').textContent=c.other;
-  document.getElementById('misnamed').textContent=mis;
-  listEl.textContent=heicNames.slice(0,500).join('\n') + (heicNames.length>500?`\n…ほか ${heicNames.length-500}件`:'');
-  result.style.display='block';
-  saveList.disabled=!heicNames.length;
-  status.textContent=`完了：HEIC/HEIF実体 ${c.heic}件 / JPEG実体 ${c.jpeg}件 / PNG実体 ${c.png}件 / その他 ${c.other}件`;
-  run.disabled=false;
+copyBad.addEventListener('click', async()=>{
+ if(!bad.length)return;
+ if(!('showDirectoryPicker' in window)){
+   alert('このコピー機能はChrome/Edgeで使えます。ブラウザをChromeで開いてもう一度試してね。');
+   return;
+ }
+ try{
+   const root=await window.showDirectoryPicker({mode:'readwrite'});
+   const now=new Date();
+   const pad=n=>String(n).padStart(2,'0');
+   const stamp=`${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+   const out=await root.getDirectoryHandle(`kii_unreadable_${stamp}`,{create:true});
+   const byName=new Map(files.map(f=>[f.name,f]));
+   let ok=0,fail=0;
+   copyBad.disabled=true; scanBtn.disabled=true; folder.disabled=true;
+   statusEl.textContent=`読めない画像をコピー中… 0 / ${bad.length}`;
+   bar.style.width='0%';
+   for(let i=0;i<bad.length;i++){
+     const name=bad[i], f=byName.get(name);
+     try{
+       if(!f) throw new Error('元ファイルが見つかりません');
+       const h=await out.getFileHandle(name,{create:true});
+       const w=await h.createWritable();
+       await w.write(f);
+       await w.close();
+       ok++;
+     }catch(e){fail++;}
+     bar.style.width=`${((i+1)/bad.length)*100}%`;
+     if((i+1)%10===0 || i+1===bad.length) statusEl.textContent=`コピー中… ${i+1} / ${bad.length}（成功 ${ok}・失敗 ${fail}）`;
+   }
+   const info=await out.getFileHandle('_kii_unreadable_list.txt',{create:true});
+   const iw=await info.createWritable();
+   await iw.write(`Kii Diary 読めない画像一覧\r\n検出: ${bad.length}件\r\nコピー成功: ${ok}件\r\nコピー失敗: ${fail}件\r\n\r\n${bad.join('\r\n')}\r\n`);
+   await iw.close();
+   statusEl.textContent=`コピー完了：成功 ${ok} / ${bad.length}・失敗 ${fail}`;
+   repairNote.innerHTML=`<span class="ok">コピー完了 ✓</span> 選んだ保存先の <b>kii_unreadable_${stamp}</b> フォルダに、読めない画像だけをコピーしました。元のAttachmentsは変更していません。Photoshopではこのフォルダをバッチ処理の入力にしてね。`;
+ }catch(e){
+   if(e && e.name==='AbortError') statusEl.textContent='コピー先の選択をキャンセルしました。';
+   else {statusEl.textContent='コピーに失敗しました。'; alert('コピーに失敗しました: '+(e?.message||e));}
+ }finally{
+   copyBad.disabled=!bad.length; scanBtn.disabled=false; folder.disabled=false;
+ }
 });
 
-saveList.addEventListener('click',()=>{
-  const blob=new Blob([heicNames.join('\r\n')],{type:'text/plain;charset=utf-8'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download='kii_heic_actual_files.txt';
-  a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+makeRepair.addEventListener('click',()=>{
+ if(!bad.length)return;
+ const names=bad.map(n=>"'"+n.replace(/'/g,"''")+"'").join(',\r\n  ');
+ const ps=`Add-Type -AssemblyName System.Windows.Forms\r\nAdd-Type -AssemblyName System.Drawing\r\n[System.Windows.Forms.Application]::EnableVisualStyles()\r\n$dlg = New-Object System.Windows.Forms.FolderBrowserDialog\r\n$dlg.Description = 'Momento Attachments folder'\r\nif ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { Write-Host 'Canceled'; exit 2 }\r\n$root = $dlg.SelectedPath\r\n$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'\r\n$backup = Join-Path $root ('kii_original_broken_backup_' + $stamp)\r\n$log = Join-Path $root ('kii_repair_result_' + $stamp + '.txt')\r\nNew-Item -ItemType Directory -Path $backup -Force | Out-Null\r\n$names = @(\r\n  ${names}\r\n)\r\n$ok=0;$fail=0\r\n('START ' + (Get-Date) + ' / target=' + $names.Count) | Out-File -LiteralPath $log -Encoding utf8\r\nforeach($name in $names){\r\n  $src=Join-Path $root $name\r\n  if(!(Test-Path -LiteralPath $src)){('MISS ' + $name) | Tee-Object -FilePath $log -Append; $fail++; continue}\r\n  try{\r\n    Copy-Item -LiteralPath $src -Destination (Join-Path $backup $name) -Force\r\n    $tmp=$src+'.kii_tmp.jpg'\r\n    $img=[System.Drawing.Image]::FromFile($src)\r\n    try {\r\n      $bmp = New-Object System.Drawing.Bitmap $img.Width,$img.Height,[System.Drawing.Imaging.PixelFormat]::Format24bppRgb\r\n      try {\r\n        $g=[System.Drawing.Graphics]::FromImage($bmp)\r\n        try {$g.DrawImage($img,0,0,$img.Width,$img.Height)} finally {$g.Dispose()}\r\n        $codec=[System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object {$_.MimeType -eq 'image/jpeg'} | Select-Object -First 1\r\n        $ep=New-Object System.Drawing.Imaging.EncoderParameters 1\r\n        $ep.Param[0]=New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality),95L\r\n        $bmp.Save($tmp,$codec,$ep)\r\n      } finally {$bmp.Dispose()}\r\n    } finally {$img.Dispose()}\r\n    Move-Item -LiteralPath $tmp -Destination $src -Force\r\n    ('OK   ' + $name) | Tee-Object -FilePath $log -Append\r\n    $ok++\r\n  } catch {\r\n    if(Test-Path -LiteralPath ($src+'.kii_tmp.jpg')){Remove-Item -LiteralPath ($src+'.kii_tmp.jpg') -Force -ErrorAction SilentlyContinue}\r\n    ('FAIL ' + $name + ' / ' + $_.Exception.Message) | Tee-Object -FilePath $log -Append\r\n    $fail++\r\n  }\r\n}\r\n('DONE ok=' + $ok + ' fail=' + $fail) | Tee-Object -FilePath $log -Append\r\n[System.Windows.Forms.MessageBox]::Show(('Done: '+$ok+' repaired / '+$fail+' failed'+[Environment]::NewLine+'Backup: '+$backup+[Environment]::NewLine+'Log: '+$log),'Kii Diary') | Out-Null\r\n`;
+ const cmd=`@echo off\r\nchcp 65001 >nul\r\ntitle Kii Diary Momento Repair\r\necho Kii Diary Momento image repair\r\necho.\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0kii_momento_repair.ps1"\r\necho.\r\necho Finished. Check the result message/log.\r\npause\r\n`;
+ function dl(text,name,type){const b=new Blob([text],{type});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+ dl(ps,'kii_momento_repair.ps1','text/plain;charset=utf-8');setTimeout(()=>dl(cmd,'kii_momento_repair.cmd','text/plain;charset=utf-8'),300);
+ repairNote.textContent='改良版です。2ファイルを同じ場所に保存して、kii_momento_repair.cmd をダブルクリックしてね。黒い画面は結果確認まで閉じません。バックアップと結果ログも作ります。';
 });
 </script>
-</body>
-</html>
+</body></html>
