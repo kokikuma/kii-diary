@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v15</title>
+<title>Days — grouped-v17</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -25,7 +25,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v15</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v17</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -105,13 +105,19 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
           </label>
           <div id="momentoAttachmentCheckResult" class="hidden" style="margin-top:10px;padding:10px 12px;border:1px solid #d8d0c8;border-radius:9px;background:#fff;font-size:12px;line-height:1.65;color:#5b554f"></div>
           <div class="actions" style="flex-wrap:wrap;margin-top:8px">
-            <button id="runtimeErrorRepairBtn" type="button">記録されたエラー写真だけ再アップロード</button>
+            <button id="runtimeErrorRepairBtn" type="button">記録されたエラー写真だけ修復</button>
             <button id="runtimeErrorHideBtn" type="button">記録された写真だけ非表示</button>
             <button id="runtimeErrorClearBtn" type="button">エラー記録をクリア</button>
           </div>
           <div id="runtimeErrorState" style="margin-top:7px;color:#666;line-height:1.55">実画面エラー：0件</div>
           <div id="runtimeErrorCloudState" style="margin-top:4px;color:#999;font-size:12px;line-height:1.45">Google保存：ログイン後に同期します</div>
           <div id="runtimeErrorRepairState" style="margin-top:4px;color:#777;font-size:12px;line-height:1.45">再アップロードする時だけ、上のattachmentフォルダを選んでください。</div>
+          <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #d8d0c8">
+            <div style="font-weight:800;font-size:12px">1枚だけ完全差し替えテスト</div>
+            <div style="color:#777;margin-top:2px">2020/01/01で欠けていた B2DF…jpg だけを、安全確認してから新しいDriveファイルへ入れ替えます。</div>
+            <div class="actions" style="margin-top:7px"><button id="singlePhotoSwapTestBtn" type="button">B2DF…jpg を1枚だけ差し替える</button></div>
+            <div id="singlePhotoSwapTestState" style="margin-top:6px;color:#777;line-height:1.5">未実行</div>
+          </div>
           <details id="runtimeErrorDetails" style="margin-top:8px">
             <summary style="cursor:pointer;color:#666">エラー写真の一覧を見る</summary>
             <div id="runtimeErrorList" style="margin-top:8px;color:#666;line-height:1.55;white-space:pre-wrap"></div>
@@ -215,7 +221,7 @@ let driveAccessToken=sessionStorage.getItem('kiiDriveAccessToken')||'';
 let driveFolderId='';
 let drivePhotosByDate=new Map();
 const driveBlobUrlCache=new Map();
-// grouped-v15: obsolete bulk photo audit UI removed; runtime error logging + targeted repair only.
+// grouped-v16: obsolete bulk photo audit UI removed; runtime error logging + targeted repair only.
 const RUNTIME_ERROR_KEY='kiiMomentoRuntimeDisplayErrorsV12';
 const runtimeDisplayErrorMap=new Map();
 try{
@@ -279,7 +285,7 @@ function scheduleRuntimeErrorCloudSave(){
 function updateRuntimeErrorPanel(){
   const state=document.getElementById('runtimeErrorState'), list=document.getElementById('runtimeErrorList');
   const rows=[...runtimeDisplayErrorMap.values()].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.name).localeCompare(String(b.name)));
-  if(state)state.textContent=rows.length?`実画面で確認されたMomento表示エラー：${rows.length}件（3回再試行後も失敗したものだけ）`:'実画面エラー：0件';
+  if(state){const rf=rows.filter(x=>Number(x.repairFailCount||0)>0).length;state.textContent=rows.length?`修復待ちのMomento写真：${rows.length}件${rf?`（うち修復失敗 ${rf}件）`:''}`:'実画面エラー：0件';}
   if(list)list.textContent=rows.length?rows.map((x,i)=>`${i+1}. ${x.date||'日付不明'}  ${x.name}`).join('\n'):'まだありません。Timelineで実際に欠けた写真だけ、ここに記録されます。';
 }
 function recordRuntimeMomentoError(img,name){
@@ -1039,10 +1045,72 @@ function stopMomentoAllAudits(){
   momentoDiaryRetestControllers.clear();
 }
 
+const SINGLE_SWAP_TEST_NAME='B2DF271B-8788-42D9-ADA9-DD8E54F2BB6F_original.jpg';
+function singleSwapState(msg){const el=document.getElementById('singlePhotoSwapTestState');if(el)el.textContent=msg;}
+async function renameDriveFile(fileId,newName){
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,size,mimeType`,{
+    method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:newName})
+  });
+  const data=await r.json();
+  if(!data?.id)throw new Error('Drive上の新しい写真名を確定できませんでした');
+  return data;
+}
+async function fetchAndDecodeDrivePhoto(fileId,name){
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,{cache:'no-store'});
+  let blob=await r.blob();
+  if(!blob.size)throw new Error('Driveから取得した画像が空でした');
+  const fixedType=guessImageMime(name,blob.type);
+  if(fixedType && fixedType!==blob.type)blob=new Blob([blob],{type:fixedType});
+  await decodeImageBlobForAudit(blob,name);
+  return blob.size;
+}
+async function runSinglePhotoSwapTest(){
+  const btn=document.getElementById('singlePhotoSwapTestBtn');
+  const name=SINGLE_SWAP_TEST_NAME, key=name.toLowerCase();
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  const local=momentoLocalFilesByName.get(key);
+  if(!local)throw new Error('先に「修復用 attachmentフォルダ」を選んでね');
+  if(!confirm(`${name}\n\nこの1枚だけを完全差し替えテストします。\n元画像をPCで確認 → 新しいDriveコピーを作成・読込確認 → 旧Driveファイルを削除 → 新しいコピーを元の名前に変更、の順で行います。\n\n他の写真には触りません。実行しますか？`))return;
+  if(btn)btn.disabled=true;
+  let temp=null;
+  try{
+    singleSwapState('① PCの元画像を確認中…');
+    await decodeImageBlobForAudit(local,name);
+    singleSwapState('② Driveへ新しいコピーを作成中…');
+    await ensureMomentoDriveFolder();
+    await loadMomentoDriveIndex();
+    const old=momentoDriveFilesByName.get(key)||null;
+    const tempName=`${name}.kii-test-${Date.now()}`;
+    const tempFile=new File([local],tempName,{type:local.type||guessImageMime(name,'image/jpeg'),lastModified:local.lastModified||Date.now()});
+    temp=await uploadOneMomentoFile(tempFile);
+    if(!temp?.id)throw new Error('新しいDriveコピーを作れませんでした');
+    singleSwapState('③ 新しいDriveコピーが本当に開けるか確認中…');
+    await fetchAndDecodeDrivePhoto(temp.id,name);
+    singleSwapState('④ 確認OK。旧Driveファイルを入れ替え中…');
+    if(old?.id){
+      await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(old.id)}`,{method:'DELETE'});
+      clearDriveBlobCache(old.id);
+    }
+    await renameDriveFile(temp.id,name);
+    clearDriveBlobCache(temp.id);
+    singleSwapState('⑤ 新しいfileIdで最終確認中…');
+    await fetchAndDecodeDrivePhoto(temp.id,name);
+    await loadMomentoDriveIndex();
+    clearRuntimeMomentoError(name);
+    await render();
+    singleSwapState(`差し替え成功 ✓  新しいDrive fileId：${temp.id.slice(0,8)}…　2020/01/01を開いて表示を確認してね。`);
+  }catch(e){
+    console.error('single photo swap test failed',e);
+    // 旧ファイル削除前に失敗した一時コピーだけは掃除する。削除後の失敗時は復旧用として残す。
+    singleSwapState('差し替えテスト失敗：'+String(e?.message||e));
+    throw e;
+  }finally{if(btn)btn.disabled=false;}
+}
+
 async function repairRuntimeErrorPhotos(){
   const state=document.getElementById('runtimeErrorRepairState');
   const rows=[...runtimeDisplayErrorMap.values()];
-  if(!rows.length){if(state)state.textContent='再アップロードするエラー写真はありません。';return;}
+  if(!rows.length){if(state)state.textContent='修復するエラー写真はありません。';return;}
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
   const targets=[]; const localMissing=[];
   for(const x of rows){
@@ -1051,40 +1119,47 @@ async function repairRuntimeErrorPhotos(){
     if(file)targets.push({row:x,key,file}); else localMissing.push(x.name);
   }
   if(!targets.length){
-    if(state)state.textContent=`エラー${rows.length}件の元写真がまだ選ばれていません。先に「Momento attachment照合」でattachmentフォルダを選んでね。`;
-    alert('先に「Momento attachment照合」で元のattachmentフォルダを選んでね。3992枚全部を再アップロードするわけではありません。');
+    if(state)state.textContent=`エラー${rows.length}件の元写真がまだ選ばれていません。先に修復用attachmentフォルダを選んでね。`;
+    alert('先に修復用attachmentフォルダを選んでね。3992枚全部をアップロードするわけではありません。');
     return;
   }
-  const msg=`実画面でエラーになった写真 ${rows.length}件のうち、元ファイルが見つかった ${targets.length}件だけを再アップロードします。\n\n正常な写真は触りません。${localMissing.length?`\n元ファイル未検出：${localMissing.length}件`:''}\n\n実行しますか？`;
+  const msg=`記録されたエラー写真 ${rows.length}件のうち、元ファイルが見つかった ${targets.length}件だけを修復します。\n\n既存ファイルがある場合は削除せず中身だけ更新します。正常な写真は触りません。${localMissing.length?`\n元ファイル未検出：${localMissing.length}件`:''}\n\n実行しますか？`;
   if(!confirm(msg))return;
   let ok=0,fail=0;
   const btn=document.getElementById('runtimeErrorRepairBtn'); if(btn)btn.disabled=true;
   try{
-    // 現在のDrive索引を最新化してから、対象だけ置き換える
     await loadMomentoDriveIndex();
     for(let i=0;i<targets.length;i++){
       const {row,key,file}=targets[i];
-      if(state)state.textContent=`エラー写真だけ修復中… ${i+1}/${targets.length}：${row.name}`;
+      if(state)state.textContent=`修復中… ${i+1}/${targets.length}（成功 ${ok} / 失敗 ${fail}）：${row.name}`;
       try{
         const old=momentoDriveFilesByName.get(key);
-        if(old?.id){
-          clearDriveBlobCache(old.id);
-          const dr=await driveApi(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(old.id)}`,{method:'DELETE'});
-          if(!dr.ok && dr.status!==404)throw new Error(`旧ファイル削除 ${dr.status}`);
-        }
-        await uploadOneMomentoFile(file);
+        if(old?.id)await updateMomentoDriveFileContent(old.id,file);
+        else await uploadOneMomentoFile(file);
         runtimeDisplayErrorMap.delete(key);
         for(const x of [...driveDisplayErrors])if(String(x||'').toLowerCase()===key)driveDisplayErrors.delete(x);
         hiddenMomentoPhotoNames.delete(key);
         ok++;
-      }catch(e){console.warn('runtime error repair failed',row.name,e);fail++;}
+      }catch(e){
+        console.warn('runtime error repair failed',row.name,e);
+        const keep=runtimeDisplayErrorMap.get(key)||row;
+        keep.lastRepairError=String(e?.message||e||'修復失敗');
+        keep.lastRepairAt=new Date().toISOString();
+        keep.repairFailCount=Number(keep.repairFailCount||0)+1;
+        runtimeDisplayErrorMap.set(key,keep);
+        driveDisplayErrors.add(row.name);
+        fail++;
+      }
+      localStorage.setItem(RUNTIME_ERROR_KEY,JSON.stringify([...runtimeDisplayErrorMap.values()]));
+      updateDriveErrorState(); updateRuntimeErrorPanel();
+      if((i+1)%10===0)await pushRuntimeErrorsToCloud();
     }
-    localStorage.setItem(RUNTIME_ERROR_KEY,JSON.stringify([...runtimeDisplayErrorMap.values()]));
     saveHiddenMomentoPhotoNames();
     await pushRuntimeErrorsToCloud();
     await loadMomentoDriveIndex();
     updateDriveErrorState(); updateRuntimeErrorPanel(); await render();
-    if(state)state.textContent=`修復完了：${ok}件を再アップロード / ${fail}件失敗${localMissing.length?` / 元ファイル未検出 ${localMissing.length}件`:''}。該当日を開き直して、エラーが再登録されないか確認してね。`;
+    const remain=runtimeDisplayErrorMap.size;
+    if(state)state.textContent=`修復完了：成功 ${ok}件 / 失敗 ${fail}件${localMissing.length?` / 元ファイル未検出 ${localMissing.length}件`:''}。残り ${remain}件はエラー一覧にそのまま残しています。`;
   }finally{if(btn)btn.disabled=false;}
 }
 
@@ -1114,7 +1189,19 @@ async function uploadOneMomentoFile(file){
   const meta=JSON.stringify({name:file.name,mimeType:mime,parents:[momentoDriveFolderId]});
   const body=new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n`,`--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,file,`\r\n--${boundary}--`],{type:`multipart/related; boundary=${boundary}`});
   const r=await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,mimeType',{method:'POST',headers:{'Content-Type':`multipart/related; boundary=${boundary}`},body});
-  return await r.json();
+  const data=await r.json();
+  if(!data?.id)throw new Error('Driveに保存できませんでした');
+  return data;
+}
+async function updateMomentoDriveFileContent(fileId,file){
+  const mime=file.type||guessImageMime(file.name,'application/octet-stream');
+  const r=await driveApi(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,size,mimeType`,{
+    method:'PATCH',headers:{'Content-Type':mime},body:file
+  });
+  const data=await r.json();
+  if(!data?.id)throw new Error('Driveの写真を更新できませんでした');
+  clearDriveBlobCache(fileId);
+  return data;
 }
 async function requestMomentoWakeLock(){try{if('wakeLock' in navigator)momentoUploadWakeLock=await navigator.wakeLock.request('screen')}catch(e){console.warn(e)}}
 async function releaseMomentoWakeLock(){try{await momentoUploadWakeLock?.release()}catch{} momentoUploadWakeLock=null}
@@ -1385,7 +1472,7 @@ async function importMomentoTextZip(file){
   const mediaRefs=[...uniq.values()].reduce((n,e)=>n+(e.attachmentNames||[]).length,0);
   const withMedia=[...uniq.values()].filter(e=>(e.attachmentNames||[]).length).length;
   const remoteMsg=firebaseUser?` / Google上の旧Momento ${remoteDeleted}件削除`:' / Google未ログインのためクラウド側は未変更';
-  status(`Momentoまとめ直し完了（grouped-v15）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
+  status(`Momentoまとめ直し完了（grouped-v16）：旧 ${old.length}件削除 → ${uniq.size}件取り込み / 写真名 ${mediaRefs}件（${withMedia}記録）を本文ごとに統合しました${remoteMsg}。次に「この端末 → Google」で同期してね。`);
 }
 
 function rawMomentoMediaRefsByDate(filename,text){
@@ -1454,6 +1541,27 @@ function formatBytes(bytes){
   const d=i>=3?2:(i===2?1:0); return `${v.toFixed(d)} ${units[i]}`;
 }
 function isLikelyImageName(name){return /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(String(name||''))}
+async function recoverMissingMomentoErrorsFromDrive(){
+  if(!driveAccessToken)return 0;
+  await loadMomentoDriveIndex();
+  const entries=(await all('entries')).filter(e=>e.source==='Momento');
+  let added=0;
+  for(const e of entries){
+    for(const n0 of (e.attachmentNames||[])){
+      const name=String(n0||'').trim(); if(!name)continue;
+      const key=name.toLowerCase();
+      if(momentoDriveFilesByName.has(key))continue;
+      if(!runtimeDisplayErrorMap.has(key)){
+        const now=new Date().toISOString();
+        runtimeDisplayErrorMap.set(key,{name,date:e.date||'',entryId:e.id||'',firstSeen:now,lastSeen:now,count:1,reason:'DriveMissing'});
+        driveDisplayErrors.add(name); added++;
+      }
+    }
+  }
+  if(added){saveRuntimeDisplayErrors();updateDriveErrorState();updateRuntimeErrorPanel();await pushRuntimeErrorsToCloud();}
+  return added;
+}
+
 async function analyzeMomentoAttachmentFolder(files){
   files=[...(files||[])].filter(f=>f && f.name);
   if(!files.length)return;
@@ -1495,6 +1603,15 @@ async function analyzeMomentoAttachmentFolder(files){
   window.kiiMomentoAttachmentMatches=matched.map(x=>x.file);
   const upBtn=document.getElementById('momentoDriveUploadBtn'); if(upBtn){upBtn.disabled=!matched.length;upBtn.textContent=matched.length?`必要${matched.length}ファイルをアップロード`:'attachment照合後にアップロード';}
   status(`Momento attachment照合：必要 ${uniqNames.length}種類中 ${matched.length}件発見 / ${formatBytes(bytes)}${missing.length?` / 不足 ${missing.length}件`:''}`);
+  if(driveAccessToken){
+    try{
+      const recovered=await recoverMissingMomentoErrorsFromDrive();
+      if(recovered){
+        const st=document.getElementById('runtimeErrorRepairState');
+        if(st)st.textContent=`前回の修復でDrive上から欠けた写真 ${recovered}件を、修復待ち一覧へ戻しました。`;
+      }
+    }catch(e){console.warn('missing repair queue recovery failed',e)}
+  }
 }
 
 async function importFacebookPhotos(files){status(`Facebook写真 ${files.length} 枚を整理中…`);const entries=await all('entries');const byDate=new Map(entries.filter(e=>e.source==='Facebook').map(e=>[e.date,e]));let linked=0,orphan=0;for(const f of files){const d=dateFromFilename(f.name);if(!d){orphan++;continue}let e=byDate.get(d);if(!e){e={id:uid(),date:d,time:'',text:'',source:'Facebook',tags:['Facebook'],favorite:false,mediaIds:[]};byDate.set(d,e)}const mid=await addMedia(f,f.name,d,'Facebook');e.mediaIds=e.mediaIds||[];e.mediaIds.push(mid);await put('entries',e);linked++}status(`Facebook写真 ${linked} 枚を日付で紐付けました${orphan?`（判定できず ${orphan} 枚）`:''}`);await render()}
@@ -1597,6 +1714,7 @@ $('#swarmTextZip').addEventListener('change',e=>e.target.files[0]&&importSwarmTe
 $('#momentoTextZip').addEventListener('change',e=>e.target.files[0]&&importMomentoTextZip(e.target.files[0]).catch(err=>status('Momento日記差し替えエラー: '+err.message)));
 $('#momentoAttachmentFolder').addEventListener('change',e=>e.target.files.length&&analyzeMomentoAttachmentFolder([...e.target.files]).catch(err=>status('Momento attachment照合エラー: '+err.message)));
 $('#runtimeErrorRepairBtn')?.addEventListener('click',()=>repairRuntimeErrorPhotos().catch(err=>{const x=document.getElementById('runtimeErrorRepairState');if(x)x.textContent='エラー写真の再アップロードに失敗：'+err.message;alert(err.message)}));
+$('#singlePhotoSwapTestBtn')?.addEventListener('click',()=>runSinglePhotoSwapTest().catch(err=>alert(err.message)));
 $('#runtimeErrorHideBtn')?.addEventListener('click',async()=>{
   let n=0;for(const x of runtimeDisplayErrorMap.values()){const k=String(x.name||'').toLowerCase();if(momentoDriveFilesByName.has(k)){hiddenMomentoPhotoNames.add(k);n++;}}
   saveHiddenMomentoPhotoNames();await render();updateRuntimeErrorPanel();momentoAuditState(n?`実画面で確認された表示エラー ${n}件を非表示にしました。Driveの写真自体は削除していません。`:'非表示にする実画面エラーはありません。');
