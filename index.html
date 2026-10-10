@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v20</title>
+<title>Days — grouped-v21</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -21,11 +21,31 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 
 </style>
 <script src="firebase-config.js"></script>
+
+<style id="v21-cleanup">
+#completedMomentoAppend,
+#legacyReimportTools,
+#completedPhotoRepair,
+#legacyFacebookDriveUpload {
+  display: none !important;
+}
+.v21-clean-note{
+  margin-top:10px;
+  padding:10px 12px;
+  border:1px solid #d8d0c8;
+  border-radius:10px;
+  background:#fff;
+  color:#777;
+  font-size:12px;
+  line-height:1.6;
+}
+</style>
+
 </head>
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v20</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v21</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -40,7 +60,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
     </div>
     <div class="search-row" style="margin-top:8px"><input id="tagFilter" type="search" placeholder="タグで絞り込み（例：サッカー）" /></div><label class="temp-filter"><input id="favoriteOnly" type="checkbox" /> お気に入りだけ表示</label>
     <details id="cloudDetails">
-      <summary>Google同期（テスト）</summary>
+      <summary>Google同期・写真</summary>
       <div style="margin-top:10px;font-size:12px;color:#666">
         <div id="cloudState">未接続</div>
         <div class="actions" style="flex-wrap:wrap">
@@ -54,7 +74,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
           <button id="driveConnectBtn" type="button">Drive写真を接続</button>
           <button id="driveRefreshBtn" type="button">Drive写真を再読込</button>
         </div>
-        <div style="display:block;margin-top:10px;padding:10px;border:1px dashed #c6bdb4;border-radius:9px;background:#fff">
+        <div id="legacyFacebookDriveUpload" style="display:block;margin-top:10px;padding:10px;border:1px dashed #c6bdb4;border-radius:9px;background:#fff">
           <div style="font-weight:700;margin-bottom:6px">Facebook写真をDriveへ（大量アップロード）</div>
           <div style="color:#888;margin-bottom:8px">途中で止まっても、同じフォルダを選び直せばアップ済み写真は自動でスキップします。</div>
           <label style="display:block;margin:5px 0">写真フォルダを選ぶ
@@ -85,7 +105,12 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
         </div>
       </div>
 
-      <details style="margin-top:10px" open>
+      <div class="v21-clean-note">
+        完了したMomento追加・写真修復・旧取り込み用の操作は通常画面から外しました。
+        今後のInstagram／Swarm対応は、必要な機能だけ追加します。
+      </div>
+
+      <details id="completedMomentoAppend" style="margin-top:10px" open>
         <summary style="cursor:pointer">新しいMomentoを追加</summary>
         <div style="margin-top:10px;background:#fff;border:1px solid #d8d0c8;border-radius:10px;padding:12px;font-size:12px;line-height:1.7">
           <div style="font-weight:800;font-size:13px">Momento追加（過去データは変更しません）</div>
@@ -108,7 +133,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
         </div>
       </details>
 
-      <details style="margin-top:10px">
+      <details id="legacyReimportTools" style="margin-top:10px">
         <summary style="cursor:pointer">元データを取り込み直す時だけ</summary>
         <div class="import-grid" style="margin-top:10px">
           <label>Momento日記差し替え（text.zip）<input id="momentoTextZip" type="file" accept=".zip" /></label>
@@ -118,7 +143,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
         </div>
       </details>
 
-      <details style="margin-top:10px" open>
+      <details id="completedPhotoRepair" style="margin-top:10px" open>
         <summary style="cursor:pointer">写真トラブル修復</summary>
         <div style="margin-top:10px;background:#fff;border:1px solid #d8d0c8;border-radius:10px;padding:12px;font-size:12px;line-height:1.7">
           <div style="font-weight:800;font-size:13px">Momento 修復済み写真をDriveへ反映</div>
