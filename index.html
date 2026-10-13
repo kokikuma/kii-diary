@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v25</title>
+<title>Days — grouped-v26</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -88,13 +88,41 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 .photo-lightbox.zoomed .photo-lightbox-hint{opacity:0}
 </style>
 
+
+<style id="calendar-nav-v26-css">
+.calendar-dialog,.picker-dialog{width:min(520px,94vw);max-height:min(82vh,720px);padding:0;overflow:hidden}
+.calendar-shell,.picker-shell{padding:16px}
+.calendar-head{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;gap:8px;margin-bottom:10px}
+.calendar-head button,.dialog-x{border:0;background:transparent;font-size:28px;color:#746d67;cursor:pointer}
+.calendar-title{text-align:center;font-size:21px;font-weight:800;color:#49423c}
+.calendar-weekdays,.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.calendar-weekdays div{text-align:center;font-size:10px;color:#9b938c;padding:7px 0;font-weight:700}
+.calendar-day{position:relative;aspect-ratio:1/1;border:0;background:transparent;border-radius:50%;font-size:15px;color:#5d5752;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.calendar-day.outside{color:#c9c2bc}
+.calendar-day.has-entry{font-weight:800}
+.calendar-day.has-entry::after{content:"";position:absolute;bottom:6px;width:4px;height:4px;border-radius:50%;background:var(--orange)}
+.calendar-day.selected{background:var(--orange);color:#fff}
+.calendar-day.selected::after{background:#fff}
+.calendar-day.today{outline:1px solid rgba(86,195,240,.65)}
+.calendar-foot{display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:8px}
+.calendar-foot button,.picker-clear{border:0;border-radius:10px;padding:9px 12px;background:#eee8e2;color:#544d47;font-weight:700;cursor:pointer}
+.calendar-foot .calendar-today{background:var(--orange);color:#fff}
+.picker-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.picker-head h2{margin:0;font-size:20px}
+.picker-list{display:flex;flex-wrap:wrap;gap:8px;max-height:56vh;overflow:auto;padding:4px 1px 10px}
+.picker-chip{border:1px solid #ddd4cc;background:#fff;border-radius:999px;padding:8px 11px;color:#5c5650;cursor:pointer;font-size:13px}
+.picker-chip.active{background:var(--orange);border-color:var(--orange);color:#fff}
+.picker-chip .count{opacity:.7;font-size:11px;margin-left:4px}
+.bottom-nav .nav-item.is-on{color:var(--orange)}
+</style>
+
 </head>
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v23</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v26</span></div>
   <div class="top-actions">
-    <button class="icon-btn" aria-label="カレンダー">▦</button>
+    <button id="calendarBtn" class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
   </div>
 </header>
@@ -318,12 +346,47 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 </main>
 
 <nav class="bottom-nav">
-  <button class="nav-item active"><span>◴</span><small>Timeline</small></button>
-  <button class="nav-item"><span>▯</span><small>Events</small></button>
+  <button id="timelineNavBtn" class="nav-item active"><span>◴</span><small>Timeline</small></button>
+  <button id="tagsNavBtn" class="nav-item"><span>▯</span><small>Tags</small></button>
   <button id="newBtn" class="add-btn" aria-label="記録を追加">＋</button>
-  <button class="nav-item"><span>✧</span><small>Explore</small></button>
-  <button class="nav-item"><span>◌</span><small>Feeds</small></button>
+  <button id="favoritesNavBtn" class="nav-item"><span>✧</span><small>Favorites</small></button>
+  <button id="sourcesNavBtn" class="nav-item"><span>◌</span><small>Sources</small></button>
 </nav>
+
+
+<dialog id="calendarDialog" class="calendar-dialog">
+  <div class="calendar-shell">
+    <div class="calendar-head">
+      <button id="calendarPrevBtn" type="button" aria-label="前の月">‹</button>
+      <div id="calendarTitle" class="calendar-title"></div>
+      <button id="calendarNextBtn" type="button" aria-label="次の月">›</button>
+    </div>
+    <div class="calendar-weekdays">
+      <div>MON</div><div>TUE</div><div>WED</div><div>THU</div><div>FRI</div><div>SAT</div><div>SUN</div>
+    </div>
+    <div id="calendarGrid" class="calendar-grid"></div>
+    <div class="calendar-foot">
+      <button id="calendarClearBtn" type="button">全期間</button>
+      <button id="calendarTodayBtn" class="calendar-today" type="button">今日</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="tagsDialog" class="picker-dialog">
+  <div class="picker-shell">
+    <div class="picker-head"><h2>Tags</h2><button id="tagsDialogClose" class="dialog-x" type="button">×</button></div>
+    <div id="tagsPickerList" class="picker-list"></div>
+    <button id="tagsClearBtn" class="picker-clear" type="button">タグ絞り込みを解除</button>
+  </div>
+</dialog>
+
+<dialog id="sourcesDialog" class="picker-dialog">
+  <div class="picker-shell">
+    <div class="picker-head"><h2>Sources</h2><button id="sourcesDialogClose" class="dialog-x" type="button">×</button></div>
+    <div id="sourcesPickerList" class="picker-list"></div>
+    <button id="sourcesClearBtn" class="picker-clear" type="button">すべて表示</button>
+  </div>
+</dialog>
 
 <dialog id="entryDialog">
 <form method="dialog" id="entryForm">
@@ -2509,7 +2572,99 @@ function guessImageMime(name,mime){
   return mime||'application/octet-stream';
 }
 
+
+let calendarViewDate=new Date();
+const pad2=n=>String(n).padStart(2,'0');
+function localDateKey(d){return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`}
+async function entryDateCounts(){
+  const rows=await all('entries');
+  const map=new Map();
+  for(const e of rows)if(e.date)map.set(e.date,(map.get(e.date)||0)+1);
+  return map;
+}
+async function drawCalendar(){
+  const grid=$('#calendarGrid'), title=$('#calendarTitle');
+  if(!grid||!title)return;
+  const y=calendarViewDate.getFullYear(), m=calendarViewDate.getMonth();
+  title.textContent=`${y}年 ${m+1}月`;
+  const counts=await entryDateCounts();
+  grid.innerHTML='';
+
+  const first=new Date(y,m,1);
+  const mondayIndex=(first.getDay()+6)%7;
+  const start=new Date(y,m,1-mondayIndex);
+  const todayKey=localDateKey(new Date());
+
+  for(let i=0;i<42;i++){
+    const d=new Date(start); d.setDate(start.getDate()+i);
+    const key=localDateKey(d);
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='calendar-day';
+    if(d.getMonth()!==m)b.classList.add('outside');
+    if(counts.has(key))b.classList.add('has-entry');
+    if(focusedDate===key)b.classList.add('selected');
+    if(todayKey===key)b.classList.add('today');
+    b.textContent=d.getDate();
+    b.dataset.date=key;
+    b.title=counts.has(key)?`${counts.get(key)}件の記録`:'';
+    grid.appendChild(b);
+  }
+}
+async function openCalendar(){
+  const base=focusedDate?new Date(focusedDate+'T00:00:00'):new Date();
+  calendarViewDate=new Date(base.getFullYear(),base.getMonth(),1);
+  await drawCalendar();
+  $('#calendarDialog').showModal();
+}
+async function focusOnDate(date){
+  focusedDate=date;
+  $('#search').value=date.replaceAll('-','');
+  await render();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+async function openTagsPicker(){
+  const rows=await all('entries');
+  const counts=new Map();
+  for(const e of rows)for(const t of allTags(e)){if(t)counts.set(t,(counts.get(t)||0)+1)}
+  const current=($('#tagFilter')?.value||'').trim().toLowerCase();
+  const list=$('#tagsPickerList'); list.innerHTML='';
+  [...counts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'ja')).forEach(([tag,count])=>{
+    const b=document.createElement('button');
+    b.type='button'; b.className='picker-chip';
+    if(tag.toLowerCase()===current)b.classList.add('active');
+    b.dataset.tag=tag;
+    b.innerHTML=`${esc(tag)} <span class="count">${count}</span>`;
+    list.appendChild(b);
+  });
+  $('#tagsDialog').showModal();
+}
+async function openSourcesPicker(){
+  const rows=await all('entries');
+  const labels={Manual:'Diary',Momento:'Momento',Facebook:'Facebook',Swarm:'Swarm',Instagram:'Instagram','Instagram Story':'Instagram Story'};
+  const counts=new Map();
+  for(const e of rows){const src=e.source||'Manual';counts.set(src,(counts.get(src)||0)+1)}
+  const current=$('#sourceFilter').value;
+  const list=$('#sourcesPickerList'); list.innerHTML='';
+  [...counts.entries()].sort((a,b)=>b[1]-a[1]).forEach(([src,count])=>{
+    const b=document.createElement('button');
+    b.type='button'; b.className='picker-chip';
+    if(src===current)b.classList.add('active');
+    b.dataset.source=src;
+    b.innerHTML=`${esc(labels[src]||src)} <span class="count">${count}</span>`;
+    list.appendChild(b);
+  });
+  $('#sourcesDialog').showModal();
+}
+function updateBottomNavState(){
+  $('#timelineNavBtn')?.classList.toggle('active',!$('#favoriteOnly')?.checked && !$('#tagFilter')?.value && !$('#sourceFilter')?.value);
+  $('#favoritesNavBtn')?.classList.toggle('is-on',!!$('#favoriteOnly')?.checked);
+  $('#tagsNavBtn')?.classList.toggle('is-on',!!($('#tagFilter')?.value||'').trim());
+  $('#sourcesNavBtn')?.classList.toggle('is-on',!!$('#sourceFilter')?.value);
+}
+
 async function render(){
+  updateBottomNavState();
   const q=$('#search').value.trim().toLowerCase(), sf=$('#sourceFilter').value;
   const tagQ=($('#tagFilter')?.value||'').trim().toLowerCase(), favOnly=$('#favoriteOnly')?.checked;
   let rows=await all('entries');
@@ -2790,6 +2945,47 @@ $('#dayFocusBack').addEventListener('click',async()=>{focusedDate='';$('#search'
 
 $('#settingsBtn').addEventListener('click',()=>$('#controlPanel').classList.toggle('hidden'));
 $('#searchBtn').addEventListener('click',()=>{ $('#controlPanel').classList.remove('hidden'); setTimeout(()=>$('#search').focus(),50); });
+
+$('#calendarBtn')?.addEventListener('click',()=>openCalendar());
+$('#calendarPrevBtn')?.addEventListener('click',async()=>{calendarViewDate=new Date(calendarViewDate.getFullYear(),calendarViewDate.getMonth()-1,1);await drawCalendar()});
+$('#calendarNextBtn')?.addEventListener('click',async()=>{calendarViewDate=new Date(calendarViewDate.getFullYear(),calendarViewDate.getMonth()+1,1);await drawCalendar()});
+$('#calendarGrid')?.addEventListener('click',async ev=>{
+  const b=ev.target.closest('.calendar-day'); if(!b)return;
+  $('#calendarDialog').close();
+  await focusOnDate(b.dataset.date);
+});
+$('#calendarClearBtn')?.addEventListener('click',async()=>{$('#calendarDialog').close();focusedDate='';$('#search').value='';await render();window.scrollTo({top:0,behavior:'smooth'})});
+$('#calendarTodayBtn')?.addEventListener('click',async()=>{$('#calendarDialog').close();await focusOnDate(localDateKey(new Date()))});
+
+$('#timelineNavBtn')?.addEventListener('click',async()=>{
+  focusedDate=''; $('#search').value=''; $('#tagFilter').value=''; $('#sourceFilter').value=''; $('#favoriteOnly').checked=false;
+  $('#controlPanel').classList.add('hidden');
+  await render(); window.scrollTo({top:0,behavior:'smooth'});
+});
+$('#tagsNavBtn')?.addEventListener('click',()=>openTagsPicker());
+$('#tagsDialogClose')?.addEventListener('click',()=>$('#tagsDialog').close());
+$('#tagsPickerList')?.addEventListener('click',async ev=>{
+  const b=ev.target.closest('.picker-chip'); if(!b)return;
+  $('#tagFilter').value=b.dataset.tag||''; focusedDate=''; $('#search').value='';
+  $('#tagsDialog').close(); await render(); window.scrollTo({top:0,behavior:'smooth'});
+});
+$('#tagsClearBtn')?.addEventListener('click',async()=>{$('#tagFilter').value='';$('#tagsDialog').close();await render()});
+
+$('#favoritesNavBtn')?.addEventListener('click',async()=>{
+  $('#favoriteOnly').checked=!$('#favoriteOnly').checked;
+  focusedDate=''; $('#search').value='';
+  await render(); window.scrollTo({top:0,behavior:'smooth'});
+});
+
+$('#sourcesNavBtn')?.addEventListener('click',()=>openSourcesPicker());
+$('#sourcesDialogClose')?.addEventListener('click',()=>$('#sourcesDialog').close());
+$('#sourcesPickerList')?.addEventListener('click',async ev=>{
+  const b=ev.target.closest('.picker-chip'); if(!b)return;
+  $('#sourceFilter').value=b.dataset.source||''; focusedDate=''; $('#search').value='';
+  $('#sourcesDialog').close(); await render(); window.scrollTo({top:0,behavior:'smooth'});
+});
+$('#sourcesClearBtn')?.addEventListener('click',async()=>{$('#sourceFilter').value='';$('#sourcesDialog').close();await render()});
+
 (async()=>{db=await openDB();await render()})();
 
 
