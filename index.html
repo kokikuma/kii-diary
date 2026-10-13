@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v22</title>
+<title>Days — grouped-v23a</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -41,11 +41,25 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 }
 </style>
 
+
+<style id="instagram-v23-css">
+.instagram-dup-list{max-height:230px;overflow:auto;margin-top:8px;border:1px solid #eee;border-radius:9px;background:#fafafa}
+.instagram-dup-row{padding:8px 10px;border-bottom:1px solid #eee;font-size:11px;line-height:1.5}
+.instagram-dup-row:last-child{border-bottom:0}
+.instagram-dup-date{font-weight:800;color:#777;margin-right:6px}
+.instagram-video-list{display:flex;flex-direction:column;gap:6px;padding:8px 0 2px}
+.instagram-video-btn{border:1px solid #d8d0c8;background:#fff;border-radius:10px;padding:10px 12px;text-align:left;color:#555;cursor:pointer;font-size:12px}
+.instagram-video-btn:active{background:#f3f0ed}
+.instagram-video-wrap{margin:0 -14px 10px;background:#111;display:flex;justify-content:center}
+.instagram-video-wrap video{display:block;max-width:100%;max-height:80vh;background:#000}
+@media(max-width:650px){.instagram-video-wrap{margin-left:-12px;margin-right:-12px}}
+</style>
+
 </head>
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v22</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v23</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -56,7 +70,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
   <section id="controlPanel" class="control-panel hidden">
     <div class="search-row">
       <input id="search" type="search" placeholder="記録を検索（日付・本文・場所など）" />
-      <select id="sourceFilter"><option value="">すべて</option><option>Manual</option><option>Momento</option><option>Facebook</option><option>Swarm</option></select>
+      <select id="sourceFilter"><option value="">すべて</option><option>Manual</option><option>Momento</option><option>Facebook</option><option>Swarm</option><option>Instagram</option><option>Instagram Story</option></select>
     </div>
     <div class="search-row" style="margin-top:8px"><input id="tagFilter" type="search" placeholder="タグで絞り込み（例：サッカー）" /></div><label class="temp-filter"><input id="favoriteOnly" type="checkbox" /> お気に入りだけ表示</label>
     <details id="cloudDetails">
@@ -140,6 +154,52 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
           <div id="swarmOfficialPhotoState" style="margin-top:7px;color:#666">待機中</div>
           <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px">
             <div id="swarmOfficialPhotoBar" style="height:100%;width:0%;background:#56C3F0"></div>
+          </div>
+        </div>
+      </details>
+
+
+      <details id="instagramOfficialDetails" style="margin-top:10px" open>
+        <summary style="cursor:pointer">Instagram公式データを取り込む</summary>
+        <div style="margin-top:10px;background:#fff;border:1px solid #d8d0c8;border-radius:10px;padding:12px;font-size:12px;line-height:1.7">
+          <div style="font-weight:800;font-size:13px">Instagramエクスポートを追加</div>
+          <div style="color:#777;margin-top:3px">
+            MetaからダウンロードしたInstagram ZIPを解凍し、その一番上のフォルダを選びます。
+            ストーリーはすべて追加。通常投稿は、同じ日のMomento本文と重複しそうなものを先に確認します。
+          </div>
+          <label style="display:block;margin-top:10px">解凍したInstagramエクスポートフォルダ
+            <input id="instagramOfficialFolder" type="file" webkitdirectory directory multiple />
+          </label>
+          <div id="instagramOfficialState" style="margin-top:7px;color:#666;line-height:1.55">未選択</div>
+
+          <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
+            <input id="instagramExcludeMomentoDupes" type="checkbox" checked style="width:auto">
+            Momento重複候補の通常投稿は取り込まない
+          </label>
+
+          <div id="instagramDupWrap" style="display:none;margin-top:8px">
+            <div style="font-weight:700">Momento重複候補</div>
+            <div id="instagramDupList" class="instagram-dup-list"></div>
+          </div>
+
+          <div class="actions" style="flex-wrap:wrap;margin-top:10px">
+            <button id="instagramOfficialImportBtn" type="button" disabled>Instagramを追加</button>
+          </div>
+
+          <hr style="border:0;border-top:1px solid #eee;margin:12px 0">
+
+          <div style="font-weight:800;font-size:13px">Instagram写真・動画をDriveへ追加</div>
+          <div style="color:#777;margin-top:3px">
+            実際にDiaryへ取り込む投稿・ストーリーに使われるメディアだけをInstagram専用フォルダへ保存します。
+            途中で止まっても、再実行すれば既存分をスキップします。
+          </div>
+          <div class="actions" style="flex-wrap:wrap;margin-top:8px">
+            <button id="instagramOfficialMediaBtn" type="button" disabled>写真・動画をDriveへ追加</button>
+            <button id="instagramOfficialMediaStopBtn" type="button" disabled>中止</button>
+          </div>
+          <div id="instagramOfficialMediaState" style="margin-top:7px;color:#666">待機中</div>
+          <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px">
+            <div id="instagramOfficialMediaBar" style="height:100%;width:0%;background:#56C3F0"></div>
           </div>
         </div>
       </details>
@@ -674,6 +734,10 @@ let momentoDriveFilesByName=new Map();
 const SWARM_DRIVE_FOLDER_NAME='kii-diary-swarm-media-app';
 let swarmDriveFolderId='';
 let swarmDriveFilesByName=new Map();
+
+const INSTAGRAM_DRIVE_FOLDER_NAME='kii-diary-instagram-media-app';
+let instagramDriveFolderId='';
+let instagramDriveFilesByName=new Map();
 let momentoUploadPaused=false;
 let momentoLocalFilesByName=new Map();
 let momentoAuditRepairNames=[];
@@ -766,16 +830,66 @@ async function uploadOneSwarmFile(file){
   return await r.json();
 }
 
+
+async function ensureInstagramDriveFolder(){
+  if(instagramDriveFolderId)return instagramDriveFolderId;
+  const q=encodeURIComponent(`name='${INSTAGRAM_DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=10`);
+  const data=await r.json();
+  if(data.files?.length){instagramDriveFolderId=data.files[0].id;return instagramDriveFolderId}
+  const created=await driveApi('https://www.googleapis.com/drive/v3/files?fields=id,name',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:INSTAGRAM_DRIVE_FOLDER_NAME,mimeType:'application/vnd.google-apps.folder'})
+  });
+  const folder=await created.json();
+  instagramDriveFolderId=folder.id;
+  return instagramDriveFolderId;
+}
+async function loadInstagramDriveIndex(){
+  if(!driveAccessToken)return;
+  await ensureInstagramDriveFolder();
+  const map=new Map(); let token='';
+  do{
+    const fq=encodeURIComponent(`'${instagramDriveFolderId}' in parents and trashed=false`);
+    let url=`https://www.googleapis.com/drive/v3/files?q=${fq}&spaces=drive&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name`;
+    if(token)url+=`&pageToken=${encodeURIComponent(token)}`;
+    const rr=await driveApi(url), data=await rr.json();
+    for(const f of (data.files||[]))map.set(String(f.name||'').toLowerCase(),f);
+    token=data.nextPageToken||'';
+  }while(token);
+  instagramDriveFilesByName=map;
+}
+async function uploadOneInstagramFile(file){
+  await ensureInstagramDriveFolder();
+  const boundary='kiiInstagramBoundary'+Math.random().toString(36).slice(2);
+  const lower=String(file.name||'').toLowerCase();
+  const mime=file.type || (lower.endsWith('.mp4')?'video/mp4':'image/jpeg');
+  const meta=JSON.stringify({name:file.name,mimeType:mime,parents:[instagramDriveFolderId]});
+  const body=new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n`,
+    `--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,
+    file,
+    `\r\n--${boundary}--`
+  ],{type:`multipart/related; boundary=${boundary}`});
+  const r=await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,mimeType',{
+    method:'POST',headers:{'Content-Type':`multipart/related; boundary=${boundary}`},body
+  });
+  return await r.json();
+}
+
 async function refreshAllDrivePhotoIndexes(){
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
-  driveState('Facebook・Momento・Swarm写真を確認中…');
+  driveState('Facebook・Momento・Swarm・Instagram写真を確認中…');
   await loadDrivePhotoIndex();
   await loadMomentoDriveIndex();
   await loadSwarmDriveIndex();
+  await loadInstagramDriveIndex();
   const facebookCount=[...drivePhotosByDate.values()].reduce((n,arr)=>n+arr.length,0);
   const momentoCount=momentoDriveFilesByName.size;
   const swarmCount=swarmDriveFilesByName.size;
-  driveState(`Drive写真：Facebook ${facebookCount}枚 / Momento ${momentoCount}ファイル / Swarm ${swarmCount}枚を認識しました`);
+  const instagramCount=instagramDriveFilesByName.size;
+  driveState(`Drive写真：Facebook ${facebookCount}枚 / Momento ${momentoCount}ファイル / Swarm ${swarmCount}枚 / Instagram ${instagramCount}ファイルを認識しました`);
 }
 async function listMomentoDriveExistingFiles(){ await loadMomentoDriveIndex(); return new Map(momentoDriveFilesByName); }
 async function getMomentoExpectedNames(){
@@ -1370,7 +1484,7 @@ async function uploadMomentoMatchedFiles(){
   await loadMomentoDriveIndex();
 }
 
-async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();momentoDriveFilesByName=new Map();swarmDriveFilesByName=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）');momentoDriveState('Momento写真：未確認')}
+async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();momentoDriveFilesByName=new Map();swarmDriveFilesByName=new Map();instagramDriveFilesByName=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）');momentoDriveState('Momento写真：未確認')}
 function cloudEntry(e){
   const {id,date,time,text,source,tags,favorite,place,lat,lng,url,attachmentNames}=e;
   return {id,date:date||'',time:time||'',text:text||'',source:source||'Manual',tags:Array.isArray(tags)?tags:[],favorite:!!favorite,place:place||'',lat:lat??null,lng:lng??null,url:url||'',attachmentNames:Array.isArray(attachmentNames)?attachmentNames:[],updatedAt:Date.now()};
@@ -1670,6 +1784,281 @@ async function uploadOfficialSwarmPhotos(){
     try{await wake?.release()}catch{}
     if(btn)btn.disabled=false;
     if(stop)stop.disabled=true;
+  }
+}
+
+
+let instagramOfficialPrepared=null;
+let instagramOfficialMediaCancelled=false;
+
+function instagramOfficialState(msg){
+  const el=document.getElementById('instagramOfficialState');
+  if(el)el.textContent=msg;
+}
+function instagramOfficialMediaState(msg,done=0,total=0){
+  const el=document.getElementById('instagramOfficialMediaState');
+  const bar=document.getElementById('instagramOfficialMediaBar');
+  if(el)el.textContent=msg;
+  if(bar)bar.style.width=`${total?Math.round(done/total*100):0}%`;
+}
+function repairMetaText(s){
+  s=String(s||'');
+  if(!s)return '';
+  try{
+    const chars=[...s];
+    if(chars.some(ch=>ch.charCodeAt(0)>255))return s;
+    const bytes=Uint8Array.from(chars.map(ch=>ch.charCodeAt(0)));
+    const fixed=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+    return fixed||s;
+  }catch{return s}
+}
+function instagramLocalDateTime(ts){
+  const d=new Date(Number(ts||0)*1000);
+  if(!Number.isFinite(d.getTime()))return {date:'',time:''};
+  const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');
+  const hh=String(d.getHours()).padStart(2,'0'),mm=String(d.getMinutes()).padStart(2,'0');
+  return {date:`${y}-${m}-${day}`,time:`${hh}:${mm}`};
+}
+function instagramBaseName(uri){return String(uri||'').replace(/\\/g,'/').split('/').pop()||''}
+function normalizeDupText(s){
+  return String(s||'').normalize('NFKC').toLowerCase()
+    .replace(/https?:\/\/\S+/g,' ')
+    .replace(/#[^\s#]+/g,' ')
+    .replace(/[\s\u3000]+/g,'')
+    .replace(/[。、，．・！!？?「」『』（）()【】\[\]…〜~ー\-_'":;：；]/g,'');
+}
+function bigramSet(s){
+  const set=new Set();
+  for(let i=0;i<s.length-1;i++)set.add(s.slice(i,i+2));
+  return set;
+}
+function dupSimilarity(a,b){
+  a=normalizeDupText(a); b=normalizeDupText(b);
+  if(!a||!b)return 0;
+  if(a===b)return 1;
+  const min=Math.min(a.length,b.length),max=Math.max(a.length,b.length);
+  if(min>=18 && (a.includes(b)||b.includes(a)))return min/max;
+  if(min<10)return 0;
+  const A=bigramSet(a),B=bigramSet(b);
+  let inter=0; for(const x of A)if(B.has(x))inter++;
+  const union=A.size+B.size-inter;
+  return union?inter/union:0;
+}
+async function prepareOfficialInstagramFolder(files){
+  instagramOfficialPrepared=null;
+  const list=[...(files||[])];
+  const byRel=new Map();
+  for(const f of list){
+    let rel=String(f.webkitRelativePath||f.name).replace(/\\/g,'/');
+    const parts=rel.split('/');
+    if(parts.length>1)rel=parts.slice(1).join('/');
+    byRel.set(rel.toLowerCase(),f);
+  }
+  const findSuffix=(suffix)=>{
+    suffix=String(suffix).toLowerCase();
+    for(const [k,f] of byRel)if(k.endsWith(suffix))return f;
+    return null;
+  };
+  const postsFile=findSuffix('your_instagram_activity/media/posts_1.json');
+  const storiesFile=findSuffix('your_instagram_activity/media/stories.json');
+  if(!postsFile||!storiesFile){
+    instagramOfficialState('posts_1.json / stories.json が見つかりません。解凍したInstagramエクスポートの一番上のフォルダを選んでね。');
+    return;
+  }
+
+  instagramOfficialState('Instagram公式データを解析中…');
+  const postsRaw=JSON.parse(await postsFile.text());
+  const storiesObj=JSON.parse(await storiesFile.text());
+  const storiesRaw=Array.isArray(storiesObj?.ig_stories)?storiesObj.ig_stories:[];
+
+  const posts=[];
+  for(let i=0;i<postsRaw.length;i++){
+    const p=postsRaw[i]||{};
+    const dt=instagramLocalDateTime(p.creation_timestamp);
+    if(!dt.date)continue;
+    const names=(p.media||[]).map(m=>instagramBaseName(m.uri)).filter(Boolean);
+    const first=names[0]||String(i);
+    posts.push({
+      id:`instagram_post_${p.creation_timestamp||0}_${first.replace(/\W+/g,'_')}`,
+      date:dt.date,time:dt.time,text:repairMetaText(p.title||''),
+      source:'Instagram',tags:['Instagram'],favorite:false,place:'',url:'',
+      lat:null,lng:null,mediaIds:[],attachmentNames:[...new Set(names)]
+    });
+  }
+
+  const stories=[];
+  for(let i=0;i<storiesRaw.length;i++){
+    const st=storiesRaw[i]||{};
+    const dt=instagramLocalDateTime(st.creation_timestamp);
+    if(!dt.date)continue;
+    const name=instagramBaseName(st.uri);
+    stories.push({
+      id:`instagram_story_${st.creation_timestamp||0}_${(name||String(i)).replace(/\W+/g,'_')}`,
+      date:dt.date,time:dt.time,text:repairMetaText(st.title||''),
+      source:'Instagram Story',tags:['Instagram','Story'],favorite:false,place:'',url:'',
+      lat:null,lng:null,mediaIds:[],attachmentNames:name?[name]:[]
+    });
+  }
+
+  const current=await all('entries');
+  const momentoByDate=new Map();
+  for(const e of current.filter(e=>e.source==='Momento')){
+    if(!momentoByDate.has(e.date))momentoByDate.set(e.date,[]);
+    momentoByDate.get(e.date).push(e);
+  }
+
+  const dupes=[];
+  for(const p of posts){
+    let best=0,bestEntry=null;
+    for(const m of (momentoByDate.get(p.date)||[])){
+      const score=dupSimilarity(p.text,m.text);
+      if(score>best){best=score;bestEntry=m}
+    }
+    if(best>=0.72 && normalizeDupText(p.text).length>=10){
+      p.momentoDuplicate=true;
+      p.momentoSimilarity=best;
+      dupes.push({post:p,momento:bestEntry,score:best});
+    }
+  }
+
+  const mediaFilesByName=new Map();
+  for(const f of list){
+    const rel=String(f.webkitRelativePath||'').replace(/\\/g,'/');
+    if(/\/media\/(posts|stories|reels)\//i.test('/'+rel) && /\.(jpe?g|png|mp4)$/i.test(f.name||'')){
+      mediaFilesByName.set(String(f.name).toLowerCase(),f);
+    }
+  }
+
+  instagramOfficialPrepared={posts,stories,dupes,mediaFilesByName};
+  document.getElementById('instagramOfficialImportBtn').disabled=false;
+  document.getElementById('instagramOfficialMediaBtn').disabled=false;
+
+  const exact=dupes.filter(x=>x.score>=.98).length;
+  instagramOfficialState(`確認できました ✓ 通常投稿 ${posts.length}件 / ストーリー ${stories.length}件。Momento重複候補 ${dupes.length}件（ほぼ完全一致 ${exact}件）。ストーリーは全件追加します。`);
+
+  const wrap=document.getElementById('instagramDupWrap');
+  const box=document.getElementById('instagramDupList');
+  if(dupes.length){
+    wrap.style.display='block';
+    box.innerHTML=dupes.slice(0,120).map(x=>{
+      const a=esc((x.post.text||'').replace(/\s+/g,' ').slice(0,110));
+      const b=esc((x.momento?.text||'').replace(/\s+/g,' ').slice(0,110));
+      return `<div class="instagram-dup-row"><span class="instagram-dup-date">${esc(x.post.date)}</span>一致度 ${Math.round(x.score*100)}%<br><b>Instagram：</b>${a||'（本文なし）'}<br><b>Momento：</b>${b||'（本文なし）'}</div>`;
+    }).join('')+(dupes.length>120?`<div class="instagram-dup-row">…ほか ${dupes.length-120}件</div>`:'');
+  }else{
+    wrap.style.display='none'; box.innerHTML='';
+  }
+  updateInstagramMediaPlan();
+}
+function getInstagramRowsForCurrentChoice(){
+  if(!instagramOfficialPrepared)return [];
+  const exclude=document.getElementById('instagramExcludeMomentoDupes')?.checked!==false;
+  const posts=exclude?instagramOfficialPrepared.posts.filter(p=>!p.momentoDuplicate):instagramOfficialPrepared.posts;
+  return [...posts,...instagramOfficialPrepared.stories];
+}
+function updateInstagramMediaPlan(){
+  if(!instagramOfficialPrepared)return;
+  const rows=getInstagramRowsForCurrentChoice();
+  const names=new Set(rows.flatMap(r=>r.attachmentNames||[]).map(x=>String(x).toLowerCase()));
+  let found=0,missing=0,videos=0,images=0;
+  for(const n of names){
+    const f=instagramOfficialPrepared.mediaFilesByName.get(n);
+    if(f){found++; /\.mp4$/i.test(f.name)?videos++:images++}
+    else missing++;
+  }
+  instagramOfficialMediaState(`取り込み対象メディア：${found}ファイル（写真 ${images} / 動画 ${videos}）${missing?` / 見つからない ${missing}`:''}`);
+}
+async function syncInstagramRowsToCloud(rows){
+  if(!firebaseUser)return 0;
+  for(let i=0;i<rows.length;i+=400){
+    const batch=fbFns.writeBatch(fbDb);
+    for(const e of rows.slice(i,i+400)){
+      const ref=fbFns.doc(fbDb,'users',firebaseUser.uid,'entries',e.id);
+      batch.set(ref,cloudEntry(e),{merge:true});
+    }
+    await batch.commit();
+  }
+  return rows.length;
+}
+async function importOfficialInstagram(){
+  if(!instagramOfficialPrepared){alert('先にInstagramエクスポートフォルダを選んでね');return}
+  const rows=getInstagramRowsForCurrentChoice();
+  const postCount=rows.filter(x=>x.source==='Instagram').length;
+  const storyCount=rows.filter(x=>x.source==='Instagram Story').length;
+  const excluded=instagramOfficialPrepared.posts.length-postCount;
+  if(!confirm(`Instagramを追加します。\n\n通常投稿 ${postCount}件${excluded?`（Momento重複候補 ${excluded}件を除外）`:''}\nストーリー ${storyCount}件（全件）\n\n既存のMomento・Facebook・Swarmは変更しません。実行しますか？`))return;
+
+  const btn=document.getElementById('instagramOfficialImportBtn');
+  btn.disabled=true;
+  try{
+    instagramOfficialState(`Instagram ${rows.length}件を追加中…`);
+    for(const e of rows)await put('entries',e);
+    let synced=0;
+    if(firebaseUser){
+      instagramOfficialState(`Instagram ${rows.length}件をGoogleへ同期中…`);
+      synced=await syncInstagramRowsToCloud(rows);
+    }
+    await render();
+    instagramOfficialState(`追加完了 ✓ 通常投稿 ${postCount}件 / ストーリー ${storyCount}件。${excluded?` Momento重複候補 ${excluded}件は除外。`:''}${firebaseUser?` Googleへ ${synced}件同期済み。`:' Google未ログインなので、あとで「この端末 → Google」を押してね。'}`);
+  }finally{
+    btn.disabled=false;
+  }
+}
+async function uploadOfficialInstagramMedia(){
+  if(!instagramOfficialPrepared){alert('先にInstagramエクスポートフォルダを選んでね');return}
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  const rows=getInstagramRowsForCurrentChoice();
+  const names=new Set(rows.flatMap(r=>r.attachmentNames||[]).map(x=>String(x).toLowerCase()));
+  const files=[...names].map(n=>instagramOfficialPrepared.mediaFilesByName.get(n)).filter(Boolean);
+  if(!files.length){alert('アップロード対象の写真・動画がありません');return}
+  if(!confirm(`Instagramの写真・動画 ${files.length}ファイルをDriveへ追加しますか？`))return;
+
+  const btn=document.getElementById('instagramOfficialMediaBtn');
+  const stop=document.getElementById('instagramOfficialMediaStopBtn');
+  btn.disabled=true; stop.disabled=false; instagramOfficialMediaCancelled=false;
+
+  let wake=null;
+  try{if('wakeLock' in navigator)wake=await navigator.wakeLock.request('screen')}catch{}
+
+  try{
+    await loadInstagramDriveIndex();
+    const existing=new Map(instagramDriveFilesByName);
+    const queue=[]; let uploaded=0,skipped=0,failed=0,done=0;
+    for(const f of files){
+      if(existing.has(String(f.name||'').toLowerCase())){skipped++;done++}
+      else queue.push(f);
+    }
+    const total=files.length;
+    instagramOfficialMediaState(`準備完了：${total}ファイル（既存 ${skipped}）`,done,total);
+
+    const workers=Array.from({length:3},async()=>{
+      while(queue.length && !instagramOfficialMediaCancelled){
+        const f=queue.shift(); if(!f)break;
+        try{
+          instagramOfficialMediaState(`${done}/${total}（保存 ${uploaded}・既存 ${skipped}・失敗 ${failed}） 保存中：${f.name}`,done,total);
+          let last=null;
+          for(let a=1;a<=4;a++){
+            try{await uploadOneInstagramFile(f);last=null;break}
+            catch(e){last=e;if(a<4)await sleep(Math.min(10000,700*(2**(a-1))))}
+          }
+          if(last)throw last;
+          uploaded++;
+        }catch(e){
+          failed++;
+          if(/接続期限/.test(String(e?.message||''))||!driveAccessToken)instagramOfficialMediaCancelled=true;
+        }
+        done++;
+        instagramOfficialMediaState(`${done}/${total}（保存 ${uploaded}・既存 ${skipped}・失敗 ${failed}）`,done,total);
+      }
+    });
+    await Promise.all(workers);
+    await loadInstagramDriveIndex();
+    await render();
+    if(instagramOfficialMediaCancelled)instagramOfficialMediaState(`中止しました。保存 ${uploaded} / 既存 ${skipped} / 失敗 ${failed}。再接続後に同じボタンで続けられます。`,done,total);
+    else instagramOfficialMediaState(`完了 ✓ 新規保存 ${uploaded} / 既存スキップ ${skipped} / 失敗 ${failed}。`,total,total);
+  }finally{
+    try{await wake?.release()}catch{}
+    btn.disabled=false; stop.disabled=true;
   }
 }
 
@@ -2125,26 +2514,30 @@ async function render(){
       const driveMedias=(e.source==='Facebook'?(drivePhotosByDate.get(e.date)||[]):[]);
       const momentoDriveMedias=(e.source==='Momento'?(e.attachmentNames||[]).filter(n=>!hiddenMomentoPhotoNames.has(String(n||'').toLowerCase())).map(n=>momentoDriveFilesByName.get(String(n||'').toLowerCase())).filter(isDisplayableImageFile):[]);
       const swarmDriveMedias=(e.source==='Swarm'?(e.attachmentNames||[]).map(n=>swarmDriveFilesByName.get(String(n||'').toLowerCase())).filter(isDisplayableImageFile):[]);
-      const remoteMedias=driveMedias.concat(momentoDriveMedias,swarmDriveMedias);
-      const totalMedia=medias.length+remoteMedias.length;
+      const instagramFiles=((e.source==='Instagram'||e.source==='Instagram Story')?(e.attachmentNames||[]).map(n=>instagramDriveFilesByName.get(String(n||'').toLowerCase())).filter(Boolean):[]);
+      const instagramDriveMedias=instagramFiles.filter(isDisplayableImageFile);
+      const instagramDriveVideos=instagramFiles.filter(f=>String(f?.mimeType||'').startsWith('video/')||/\.mp4$/i.test(String(f?.name||'')));
+      const remoteMedias=driveMedias.concat(momentoDriveMedias,swarmDriveMedias,instagramDriveMedias);
+      const totalMedia=medias.length+remoteMedias.length+instagramDriveVideos.length;
       let hero='';
       if(medias.length){const url=URL.createObjectURL(medias[0].blob);hero=`<div class="hero">${totalMedia>1?'<button class="hero-nav prev" type="button" aria-label="前の写真">‹</button>':''}<img class="hero-image" src="${url}" alt="">${totalMedia>1?'<button class="hero-nav next" type="button" aria-label="次の写真">›</button>':''}<span class="hero-count">📷 ${totalMedia}</span></div>`}
       else if(remoteMedias.length){const f=remoteMedias[0];hero=`<div class="hero">${totalMedia>1?'<button class="hero-nav prev" type="button" aria-label="前の写真">‹</button>':''}<img class="hero-image" data-drive-id="${esc(f.id)}" data-drive-source="${esc(e.source)}" data-entry-date="${esc(e.date)}" data-entry-id="${esc(e.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='900'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}">${totalMedia>1?'<button class="hero-nav next" type="button" aria-label="次の写真">›</button>':''}<span class="hero-count">📷 ${totalMedia}</span></div>`}
       const thumbItems=[];
       medias.forEach((m,i)=>{const u=URL.createObjectURL(m.blob);thumbItems.push(`<img class="${i===0?'active':''}" data-full="${u}" src="${u}" alt="">`)});
       remoteMedias.forEach((f,i)=>{const active=!medias.length&&i===0?'active':'';thumbItems.push(`<img class="${active}" data-drive-id="${esc(f.id)}" data-full-drive-id="${esc(f.id)}" data-drive-source="${esc(e.source)}" data-entry-date="${esc(e.date)}" data-entry-id="${esc(e.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100%25' height='100%25' fill='%23ddd'/%3E%3C/svg%3E" alt="${esc(f.name)}">`)});
-      const thumbs=totalMedia>1?`<div class="photo-strip">${thumbItems.join('')}</div>`:'';
+      const thumbs=(medias.length+remoteMedias.length)>1?`<div class="photo-strip">${thumbItems.join('')}</div>`:'';
+      const videoHtml=instagramDriveVideos.length?`<div class="instagram-video-list">${instagramDriveVideos.map(v=>`<button type="button" class="instagram-video-btn" data-drive-video-id="${esc(v.id)}" data-video-name="${esc(v.name)}">▶ 動画を再生　${esc(v.name)}</button>`).join('')}</div>`:'';
       const text=e.text?`<div class="moment-text">${esc(e.text)}</div>`:'';
       const shownPlace=cleanPlace(e.place), place=shownPlace?`<div class="place">📍 ${esc(shownPlace)}</div>`:'';
       const tags=allTags(e), tagHtml=tags.length?`<div class="tag-row">${tags.map(t=>`<button class="tag-chip" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>`:'';
       const sourceLabel=e.source==='Manual'?'日記':e.source;
       const meta=`<div class="moment-meta"><span class="source">${esc(sourceLabel)}</span>${e.time?`<span>🕘 ${esc(e.time)}</span>`:''}${totalMedia?`<span>▧ ${totalMedia}</span>`:''}<button class="fav-entry ${e.favorite?'on':''}" data-id="${e.id}" title="お気に入り">${e.favorite?'★':'☆'}</button><details class="entry-menu"><summary class="menu-summary" title="メニュー">⋯</summary><div class="menu-pop"><button class="edit-entry" data-id="${e.id}">編集</button><button class="delete-inline" data-id="${e.id}">削除</button></div></details></div>`;
       // 写真がある時は写真を先に、その後に本文
-      card.innerHTML=hero+thumbs+text+place+tagHtml+meta; const pnav=card.querySelector('.hero-nav.prev'); if(pnav)pnav.disabled=true; sec.appendChild(card);
+      card.innerHTML=hero+thumbs+videoHtml+text+place+tagHtml+meta; const pnav=card.querySelector('.hero-nav.prev'); if(pnav)pnav.disabled=true; sec.appendChild(card);
     }
     root.appendChild(sec);
   }
-  if(driveAccessToken && (drivePhotosByDate.size||momentoDriveFilesByName.size||swarmDriveFilesByName.size))observeDriveImages();
+  if(driveAccessToken && (drivePhotosByDate.size||momentoDriveFilesByName.size||swarmDriveFilesByName.size||instagramDriveFilesByName.size))observeDriveImages();
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
 
@@ -2155,6 +2548,12 @@ $('#swarmOfficialFolder')?.addEventListener('change',e=>prepareOfficialSwarmFold
 $('#swarmOfficialImportBtn')?.addEventListener('click',()=>importOfficialSwarm().catch(err=>{swarmOfficialState('差し替えエラー：'+err.message);alert(err.message)}));
 $('#swarmOfficialPhotoBtn')?.addEventListener('click',()=>uploadOfficialSwarmPhotos().catch(err=>{swarmOfficialPhotoState('写真追加エラー：'+err.message);alert(err.message)}));
 $('#swarmOfficialPhotoStopBtn')?.addEventListener('click',()=>{swarmOfficialUploadCancelled=true;swarmOfficialPhotoState('中止しています…');});
+$('#instagramOfficialFolder')?.addEventListener('change',e=>prepareOfficialInstagramFolder([...e.target.files]).catch(err=>instagramOfficialState('解析エラー：'+err.message)));
+$('#instagramExcludeMomentoDupes')?.addEventListener('change',()=>updateInstagramMediaPlan());
+$('#instagramOfficialImportBtn')?.addEventListener('click',()=>importOfficialInstagram().catch(err=>{instagramOfficialState('追加エラー：'+err.message);alert(err.message)}));
+$('#instagramOfficialMediaBtn')?.addEventListener('click',()=>uploadOfficialInstagramMedia().catch(err=>{instagramOfficialMediaState('写真・動画追加エラー：'+err.message);alert(err.message)}));
+$('#instagramOfficialMediaStopBtn')?.addEventListener('click',()=>{instagramOfficialMediaCancelled=true;instagramOfficialMediaState('中止しています…');});
+
 
 $('#momentoAppendTextZip')?.addEventListener('change',e=>e.target.files[0]&&importMomentoAppendTextZip(e.target.files[0]).catch(err=>momentoAppendState('追加エラー：'+err.message)));
 $('#momentoAppendPhotoFolder')?.addEventListener('change',e=>chooseMomentoAppendPhotoFolder([...e.target.files]));
@@ -2224,6 +2623,18 @@ $('#timeline').addEventListener('click',async ev=>{
   const edit=ev.target.closest('.edit-entry'); if(edit){await openEditEntry(edit.dataset.id);return}
   const delBtn=ev.target.closest('.delete-inline'); if(delBtn){await deleteEntryById(delBtn.dataset.id);return}
   const tag=ev.target.closest('.tag-chip'); if(tag){$('#controlPanel').classList.remove('hidden');$('#tagFilter').value=tag.dataset.tag;await render();return}
+  const videoBtn=ev.target.closest('.instagram-video-btn'); if(videoBtn){
+    try{
+      videoBtn.disabled=true; videoBtn.textContent='動画を読み込み中…';
+      const url=await driveBlobUrl(videoBtn.dataset.driveVideoId,videoBtn.dataset.videoName||'');
+      const wrap=document.createElement('div'); wrap.className='instagram-video-wrap';
+      const v=document.createElement('video'); v.controls=true; v.playsInline=true; v.preload='metadata'; v.src=url;
+      wrap.appendChild(v); videoBtn.replaceWith(wrap);
+    }catch(err){
+      videoBtn.disabled=false; videoBtn.textContent='▶ 動画を再生　'+(videoBtn.dataset.videoName||''); alert(err.message);
+    }
+    return;
+  }
   const nav=ev.target.closest('.hero-nav'); if(nav){
     const moment=nav.closest('.moment');
     const thumbs=[...moment.querySelectorAll('.photo-strip img')];
