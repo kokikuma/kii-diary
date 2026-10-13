@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#56C3F0" />
-<title>Days — grouped-v21</title>
+<title>Days — grouped-v22</title>
 <style>
 :root{
   font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN","Hiragino Sans",-apple-system,BlinkMacSystemFont,sans-serif;
@@ -45,7 +45,7 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
 <body>
 <header class="appbar">
   <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙︎</button>
-  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v21</span></div>
+  <div class="app-title">Days <span style="font-size:11px;font-weight:600;opacity:.78;vertical-align:middle;letter-spacing:.2px">grouped-v22</span></div>
   <div class="top-actions">
     <button class="icon-btn" aria-label="カレンダー">▦</button>
     <button id="searchBtn" class="icon-btn" aria-label="検索">⌕</button>
@@ -106,9 +106,43 @@ dialog{width:min(650px,94vw);border:0;border-radius:18px;padding:0;background:#f
       </div>
 
       <div class="v21-clean-note">
-        完了したMomento追加・写真修復・旧取り込み用の操作は通常画面から外しました。
-        今後のInstagram／Swarm対応は、必要な機能だけ追加します。
+        完了したMomento追加・写真修復・旧取り込み用の操作は通常画面から外しています。
+        Swarmは公式エクスポートから差し替えできます。
       </div>
+
+      <details id="swarmOfficialDetails" style="margin-top:10px" open>
+        <summary style="cursor:pointer">Swarm公式データを取り込む</summary>
+        <div style="margin-top:10px;background:#fff;border:1px solid #d8d0c8;border-radius:10px;padding:12px;font-size:12px;line-height:1.7">
+          <div style="font-weight:800;font-size:13px">Swarm公式エクスポートへ差し替え</div>
+          <div style="color:#777;margin-top:3px">
+            Foursquare / SwarmからダウンロードしたZIPをPCで解凍し、そのフォルダを選びます。
+            今あるSwarmだけを差し替え、Facebook・Momento・日記には触れません。
+          </div>
+          <label style="display:block;margin-top:10px">解凍したSwarmエクスポートフォルダ
+            <input id="swarmOfficialFolder" type="file" webkitdirectory directory multiple />
+          </label>
+          <div id="swarmOfficialState" style="margin-top:7px;color:#666;line-height:1.55">未選択</div>
+          <div class="actions" style="flex-wrap:wrap;margin-top:8px">
+            <button id="swarmOfficialImportBtn" type="button" disabled>Swarm 897件へ差し替える</button>
+          </div>
+
+          <hr style="border:0;border-top:1px solid #eee;margin:12px 0">
+
+          <div style="font-weight:800;font-size:13px">Swarm写真をDriveへ追加</div>
+          <div style="color:#777;margin-top:3px">
+            チェックインに紐付く写真だけをSwarm専用フォルダへ保存します。
+            途中で止まっても、もう一度実行すればDrive上の既存写真は自動スキップします。
+          </div>
+          <div class="actions" style="flex-wrap:wrap;margin-top:8px">
+            <button id="swarmOfficialPhotoBtn" type="button" disabled>Swarm写真をDriveへ追加</button>
+            <button id="swarmOfficialPhotoStopBtn" type="button" disabled>中止</button>
+          </div>
+          <div id="swarmOfficialPhotoState" style="margin-top:7px;color:#666">待機中</div>
+          <div style="height:8px;background:#eee;border-radius:999px;overflow:hidden;margin-top:6px">
+            <div id="swarmOfficialPhotoBar" style="height:100%;width:0%;background:#56C3F0"></div>
+          </div>
+        </div>
+      </details>
 
       <details id="completedMomentoAppend" style="margin-top:10px" open>
         <summary style="cursor:pointer">新しいMomentoを追加</summary>
@@ -636,6 +670,10 @@ function observeDriveImages(){
 const MOMENTO_DRIVE_FOLDER_NAME='kii-diary-momento-media-app';
 let momentoDriveFolderId='';
 let momentoDriveFilesByName=new Map();
+
+const SWARM_DRIVE_FOLDER_NAME='kii-diary-swarm-media-app';
+let swarmDriveFolderId='';
+let swarmDriveFilesByName=new Map();
 let momentoUploadPaused=false;
 let momentoLocalFilesByName=new Map();
 let momentoAuditRepairNames=[];
@@ -680,14 +718,64 @@ async function loadMomentoDriveIndex(){
   momentoDriveFilesByName=map; momentoDriveState(`Momento写真：${count}ファイルを認識しました`); await render();
 }
 
+
+async function ensureSwarmDriveFolder(){
+  if(swarmDriveFolderId)return swarmDriveFolderId;
+  const q=encodeURIComponent(`name='${SWARM_DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r=await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=10`);
+  const data=await r.json();
+  if(data.files?.length){swarmDriveFolderId=data.files[0].id;return swarmDriveFolderId}
+  const created=await driveApi('https://www.googleapis.com/drive/v3/files?fields=id,name',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:SWARM_DRIVE_FOLDER_NAME,mimeType:'application/vnd.google-apps.folder'})
+  });
+  const folder=await created.json();
+  swarmDriveFolderId=folder.id;
+  return swarmDriveFolderId;
+}
+async function loadSwarmDriveIndex(){
+  if(!driveAccessToken)return;
+  await ensureSwarmDriveFolder();
+  const map=new Map(); let token='';
+  do{
+    const fq=encodeURIComponent(`'${swarmDriveFolderId}' in parents and trashed=false`);
+    let url=`https://www.googleapis.com/drive/v3/files?q=${fq}&spaces=drive&fields=nextPageToken,files(id,name,mimeType,size)&pageSize=1000&orderBy=name`;
+    if(token)url+=`&pageToken=${encodeURIComponent(token)}`;
+    const rr=await driveApi(url), data=await rr.json();
+    for(const f of (data.files||[]))map.set(String(f.name||'').toLowerCase(),f);
+    token=data.nextPageToken||'';
+  }while(token);
+  swarmDriveFilesByName=map;
+  await render();
+}
+async function uploadOneSwarmFile(file){
+  await ensureSwarmDriveFolder();
+  const boundary='kiiSwarmBoundary'+Math.random().toString(36).slice(2);
+  const mime=file.type||'image/jpeg';
+  const meta=JSON.stringify({name:file.name,mimeType:mime,parents:[swarmDriveFolderId]});
+  const body=new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n`,
+    `--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,
+    file,
+    `\r\n--${boundary}--`
+  ],{type:`multipart/related; boundary=${boundary}`});
+  const r=await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,mimeType',{
+    method:'POST',headers:{'Content-Type':`multipart/related; boundary=${boundary}`},body
+  });
+  return await r.json();
+}
+
 async function refreshAllDrivePhotoIndexes(){
   if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
-  driveState('Facebook・Momento写真を確認中…');
+  driveState('Facebook・Momento・Swarm写真を確認中…');
   await loadDrivePhotoIndex();
   await loadMomentoDriveIndex();
+  await loadSwarmDriveIndex();
   const facebookCount=[...drivePhotosByDate.values()].reduce((n,arr)=>n+arr.length,0);
   const momentoCount=momentoDriveFilesByName.size;
-  driveState(`Drive写真：Facebook ${facebookCount}枚 / Momento ${momentoCount}ファイルを認識しました`);
+  const swarmCount=swarmDriveFilesByName.size;
+  driveState(`Drive写真：Facebook ${facebookCount}枚 / Momento ${momentoCount}ファイル / Swarm ${swarmCount}枚を認識しました`);
 }
 async function listMomentoDriveExistingFiles(){ await loadMomentoDriveIndex(); return new Map(momentoDriveFilesByName); }
 async function getMomentoExpectedNames(){
@@ -1282,7 +1370,7 @@ async function uploadMomentoMatchedFiles(){
   await loadMomentoDriveIndex();
 }
 
-async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();momentoDriveFilesByName=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）');momentoDriveState('Momento写真：未確認')}
+async function firebaseLogout(){if(fbAuth)await fbFns.signOut(fbAuth);sessionStorage.removeItem('kiiDriveAccessToken');driveAccessToken='';drivePhotosByDate=new Map();momentoDriveFilesByName=new Map();swarmDriveFilesByName=new Map();driveState('Drive写真：未接続（このアプリ専用の写真だけ扱います）');momentoDriveState('Momento写真：未確認')}
 function cloudEntry(e){
   const {id,date,time,text,source,tags,favorite,place,lat,lng,url,attachmentNames}=e;
   return {id,date:date||'',time:time||'',text:text||'',source:source||'Manual',tags:Array.isArray(tags)?tags:[],favorite:!!favorite,place:place||'',lat:lat??null,lng:lng??null,url:url||'',attachmentNames:Array.isArray(attachmentNames)?attachmentNames:[],updatedAt:Date.now()};
@@ -1344,6 +1432,246 @@ function uid(prefix='e'){return prefix+'_'+crypto.randomUUID()}
 function normDate(y,m,d){return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`}
 function dateFromFilename(name){let m=name.match(/(\d{4})[._-]?(\d{2})[._-]?(\d{2})/);return m?normDate(m[1],m[2],m[3]):null}
 async function addMedia(blob,name,date,source){const id=uid('m');await put('media',{id,name,date,source,blob});return id}
+
+
+let swarmOfficialPrepared=null;
+let swarmOfficialUploadCancelled=false;
+
+function swarmOfficialState(msg){
+  const el=document.getElementById('swarmOfficialState');
+  if(el)el.textContent=msg;
+}
+function swarmOfficialPhotoState(msg,done=0,total=0){
+  const el=document.getElementById('swarmOfficialPhotoState');
+  const bar=document.getElementById('swarmOfficialPhotoBar');
+  if(el)el.textContent=msg;
+  if(bar)bar.style.width=`${total?Math.round(done/total*100):0}%`;
+}
+function swarmLocalDateTime(createdAt,offsetMinutes){
+  const m=String(createdAt||'').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if(!m)return {date:'',time:''};
+  const utc=Date.UTC(Number(m[1]),Number(m[2])-1,Number(m[3]),Number(m[4]),Number(m[5]),Number(m[6]));
+  const d=new Date(utc+(Number(offsetMinutes)||0)*60000);
+  return {date:d.toISOString().slice(0,10),time:d.toISOString().slice(11,16)};
+}
+function swarmCheckinIdFromPhoto(photo){
+  const m=String(photo?.relatedItemUrl||'').match(/\/checkin\/([0-9a-f]+)/i);
+  return m?m[1]:'';
+}
+function swarmPhotoName(photo){
+  const suffix=String(photo?.suffix||'');
+  return suffix.split('/').pop()||'';
+}
+async function prepareOfficialSwarmFolder(files){
+  swarmOfficialPrepared=null;
+  const list=[...(files||[])];
+  const byBase=new Map(list.map(f=>[String(f.name||'').toLowerCase(),f]));
+  const checkFile=byBase.get('checkins1.json');
+  const photoFiles=[byBase.get('photos1.json'),byBase.get('photos2.json')].filter(Boolean);
+  if(!checkFile||!photoFiles.length){
+    swarmOfficialState('checkins1.json / photos1.json が見つかりません。解凍したSwarmエクスポートの一番上のフォルダを選んでね。');
+    return;
+  }
+  swarmOfficialState('Swarm公式データを解析中…');
+  const checkObj=JSON.parse(await checkFile.text());
+  const checkins=Array.isArray(checkObj?.items)?checkObj.items:[];
+  const photos=[];
+  for(const pf of photoFiles){
+    const obj=JSON.parse(await pf.text());
+    if(Array.isArray(obj?.items))photos.push(...obj.items);
+  }
+
+  const photoNamesByCheckin=new Map();
+  const referencedNames=new Set();
+  let orphanPhotos=0;
+  const checkinIds=new Set(checkins.map(c=>String(c.id||'')));
+  for(const p of photos){
+    const cid=swarmCheckinIdFromPhoto(p);
+    const name=swarmPhotoName(p);
+    if(cid&&checkinIds.has(cid)&&name){
+      if(!photoNamesByCheckin.has(cid))photoNamesByCheckin.set(cid,[]);
+      photoNamesByCheckin.get(cid).push(name);
+      referencedNames.add(name.toLowerCase());
+    }else orphanPhotos++;
+  }
+
+  const pixFiles=new Map();
+  for(const f of list){
+    const rel=String(f.webkitRelativePath||'').replace(/\\/g,'/');
+    if(/\/pix\//i.test('/'+rel) && /\.(jpe?g|png)$/i.test(f.name||'')){
+      pixFiles.set(String(f.name).toLowerCase(),f);
+    }
+  }
+
+  const rows=[];
+  for(const c of checkins){
+    const dt=swarmLocalDateTime(c.createdAt,c.timeZoneOffset);
+    if(!dt.date)continue;
+    const names=[...new Set(photoNamesByCheckin.get(String(c.id||''))||[])];
+    rows.push({
+      id:'swarm_official_'+String(c.id||''),
+      date:dt.date,
+      time:dt.time,
+      text:String(c.shout||'').trim(),
+      source:'Swarm',
+      place:String(c.venue?.name||'').trim(),
+      url:String(c.canonicalUrl||''),
+      lat:Number.isFinite(Number(c.lat))?Number(c.lat):null,
+      lng:Number.isFinite(Number(c.lng))?Number(c.lng):null,
+      tags:['Swarm'],
+      favorite:false,
+      mediaIds:[],
+      attachmentNames:names,
+      swarmCheckinId:String(c.id||'')
+    });
+  }
+  rows.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+
+  const uploadFiles=[];
+  let missingPix=0;
+  for(const key of referencedNames){
+    const f=pixFiles.get(key);
+    if(f)uploadFiles.push(f); else missingPix++;
+  }
+
+  swarmOfficialPrepared={
+    rows,
+    uploadFiles,
+    checkins:checkins.length,
+    photoMeta:photos.length,
+    linkedPhotos:referencedNames.size,
+    orphanPhotos,
+    missingPix,
+    first:rows[0]?.date||'',
+    last:rows[rows.length-1]?.date||''
+  };
+  const importBtn=document.getElementById('swarmOfficialImportBtn');
+  const photoBtn=document.getElementById('swarmOfficialPhotoBtn');
+  if(importBtn)importBtn.disabled=!rows.length;
+  if(photoBtn)photoBtn.disabled=!uploadFiles.length;
+  swarmOfficialState(
+    `確認できました ✓ チェックイン ${rows.length}件（${swarmOfficialPrepared.first}〜${swarmOfficialPrepared.last}） / `+
+    `写真 ${uploadFiles.length}枚を紐付け / 写真なし ${rows.filter(x=>!x.attachmentNames.length).length}件`+
+    `${orphanPhotos?` / チェックイン外写真 ${orphanPhotos}枚は除外`:''}`+
+    `${missingPix?` / pix不足 ${missingPix}枚`:''}`
+  );
+}
+async function syncOfficialSwarmRowsToCloud(rows){
+  if(!firebaseUser)return 0;
+  for(let i=0;i<rows.length;i+=400){
+    const batch=fbFns.writeBatch(fbDb);
+    for(const e of rows.slice(i,i+400)){
+      const ref=fbFns.doc(fbDb,'users',firebaseUser.uid,'entries',e.id);
+      batch.set(ref,cloudEntry(e),{merge:true});
+    }
+    await batch.commit();
+  }
+  return rows.length;
+}
+async function importOfficialSwarm(){
+  const prep=swarmOfficialPrepared;
+  if(!prep?.rows?.length){alert('先にSwarmエクスポートフォルダを選んでね');return;}
+  const old=(await all('entries')).filter(e=>e.source==='Swarm');
+  if(!confirm(
+    `今あるSwarm ${old.length}件だけを削除して、公式エクスポート ${prep.rows.length}件へ差し替えます。\n\n`+
+    `Facebook・Momento・日記は変更しません。実行しますか？`
+  ))return;
+
+  const btn=document.getElementById('swarmOfficialImportBtn');
+  if(btn)btn.disabled=true;
+  try{
+    swarmOfficialState(`Swarm差し替え中… 旧 ${old.length}件を整理しています`);
+    for(const e of old)await del('entries',e.id);
+
+    let remoteDeleted=0;
+    if(firebaseUser){
+      try{remoteDeleted=await deleteRemoteSwarmEntries()}
+      catch(err){console.warn('remote Swarm delete failed',err);}
+    }
+
+    for(const e of prep.rows)await put('entries',e);
+    let synced=0;
+    if(firebaseUser){
+      swarmOfficialState(`Swarm ${prep.rows.length}件をGoogleへ同期中…`);
+      synced=await syncOfficialSwarmRowsToCloud(prep.rows);
+    }
+
+    await render();
+    swarmOfficialState(
+      `差し替え完了 ✓ 旧 ${old.length}件 → 公式 ${prep.rows.length}件。`+
+      `写真付き ${prep.rows.filter(x=>x.attachmentNames.length).length}件 / 写真 ${prep.uploadFiles.length}枚。`+
+      (firebaseUser?` Googleも更新済み（旧 ${remoteDeleted}件削除・新 ${synced}件同期）。`:' Google未ログインなので、あとで「この端末 → Google」を押してね。')
+    );
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+async function uploadOfficialSwarmPhotos(){
+  const prep=swarmOfficialPrepared;
+  if(!prep?.uploadFiles?.length){alert('先にSwarmエクスポートフォルダを選んでね');return;}
+  if(!driveAccessToken)throw new Error('先に「Drive写真を接続」を押してね');
+  if(!confirm(`チェックインに紐付くSwarm写真 ${prep.uploadFiles.length}枚をDriveへ追加しますか？`))return;
+
+  const btn=document.getElementById('swarmOfficialPhotoBtn');
+  const stop=document.getElementById('swarmOfficialPhotoStopBtn');
+  if(btn)btn.disabled=true;
+  if(stop)stop.disabled=false;
+  swarmOfficialUploadCancelled=false;
+
+  let wake=null;
+  try{if('wakeLock' in navigator)wake=await navigator.wakeLock.request('screen')}catch{}
+
+  try{
+    await loadSwarmDriveIndex();
+    const existing=new Map(swarmDriveFilesByName);
+    const queue=[];
+    let uploaded=0,skipped=0,failed=0,done=0;
+    for(const f of prep.uploadFiles){
+      if(existing.has(String(f.name||'').toLowerCase())){skipped++;done++;}
+      else queue.push(f);
+    }
+    swarmOfficialPhotoState(`準備完了：${prep.uploadFiles.length}枚（既存 ${skipped}枚）`,done,prep.uploadFiles.length);
+
+    const total=prep.uploadFiles.length;
+    const workers=Array.from({length:3},async()=>{
+      while(queue.length && !swarmOfficialUploadCancelled){
+        const f=queue.shift();
+        if(!f)break;
+        try{
+          swarmOfficialPhotoState(`${done}/${total}（保存 ${uploaded}・既存 ${skipped}・失敗 ${failed}） 保存中：${f.name}`,done,total);
+          let last=null;
+          for(let a=1;a<=4;a++){
+            try{await uploadOneSwarmFile(f);last=null;break}
+            catch(e){last=e;if(a<4)await sleep(Math.min(10000,700*(2**(a-1))))}
+          }
+          if(last)throw last;
+          uploaded++;
+        }catch(e){
+          failed++;
+          console.warn('Swarm photo upload failed',f.name,e);
+          if(/接続期限/.test(String(e?.message||''))||!driveAccessToken){
+            swarmOfficialUploadCancelled=true;
+          }
+        }
+        done++;
+        swarmOfficialPhotoState(`${done}/${total}（保存 ${uploaded}・既存 ${skipped}・失敗 ${failed}）`,done,total);
+      }
+    });
+    await Promise.all(workers);
+    await loadSwarmDriveIndex();
+    await render();
+
+    if(swarmOfficialUploadCancelled){
+      swarmOfficialPhotoState(`中止しました。保存 ${uploaded} / 既存 ${skipped} / 失敗 ${failed}。再接続後に同じボタンを押せば既存分をスキップして続けられます。`,done,total);
+    }else{
+      swarmOfficialPhotoState(`完了 ✓ 新規保存 ${uploaded} / 既存スキップ ${skipped} / 失敗 ${failed}。`,total,total);
+    }
+  }finally{
+    try{await wake?.release()}catch{}
+    if(btn)btn.disabled=false;
+    if(stop)stop.disabled=true;
+  }
+}
 
 function parseFacebook(text){const lines=text.replace(/\r/g,'').split('\n');const rows=[];let cur=null;for(const line of lines){const m=line.trim().match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);if(m){if(cur)rows.push(cur);cur={id:uid(),date:normDate(m[1],m[2],m[3]),time:'',text:'',source:'Facebook',tags:['Facebook'],favorite:false,mediaIds:[]};continue}if(cur)cur.text+=(cur.text?'\n':'')+line}if(cur)rows.push(cur);for(const r of rows)r.text=r.text.trim();return rows}
 function parseMomentoText(filename,text){const date=dateFromFilename(filename);const lines=text.replace(/\r/g,'').split('\n');let time='', body=[], source='Momento', place='', url='';for(const line of lines){if(!time&&/^\d{1,2}:\d{2}$/.test(line.trim())){time=line.trim();continue}if(/^Feed:\s*Swarm/i.test(line)){source='Swarm';continue}if(/^URL:\s*/i.test(line)){url=line.replace(/^URL:\s*/i,'').trim();continue}if(/^At:\s*/i.test(line)){place=line.replace(/^At:\s*/i,'').trim();continue}if(/^Media:\s*/i.test(line))continue;if(/^={3,}$/.test(line.trim()))continue;if(/^\d{1,2}\s+[A-Za-z]+\s+\d{4}$/.test(line.trim()))continue;body.push(line)}return {id:uid(),date,time,text:body.join('\n').trim(),source,place,url,tags:[source==='Manual'?'日記':source],favorite:false,mediaIds:[],_mediaNames:[...text.matchAll(/^Media:\s*(.+)$/gmi)].map(x=>x[1].trim())}}
@@ -1796,7 +2124,8 @@ async function render(){
       const medias=[]; for(const mid of (e.mediaIds||[])){const m=await get('media',mid); if(m)medias.push(m)}
       const driveMedias=(e.source==='Facebook'?(drivePhotosByDate.get(e.date)||[]):[]);
       const momentoDriveMedias=(e.source==='Momento'?(e.attachmentNames||[]).filter(n=>!hiddenMomentoPhotoNames.has(String(n||'').toLowerCase())).map(n=>momentoDriveFilesByName.get(String(n||'').toLowerCase())).filter(isDisplayableImageFile):[]);
-      const remoteMedias=driveMedias.concat(momentoDriveMedias);
+      const swarmDriveMedias=(e.source==='Swarm'?(e.attachmentNames||[]).map(n=>swarmDriveFilesByName.get(String(n||'').toLowerCase())).filter(isDisplayableImageFile):[]);
+      const remoteMedias=driveMedias.concat(momentoDriveMedias,swarmDriveMedias);
       const totalMedia=medias.length+remoteMedias.length;
       let hero='';
       if(medias.length){const url=URL.createObjectURL(medias[0].blob);hero=`<div class="hero">${totalMedia>1?'<button class="hero-nav prev" type="button" aria-label="前の写真">‹</button>':''}<img class="hero-image" src="${url}" alt="">${totalMedia>1?'<button class="hero-nav next" type="button" aria-label="次の写真">›</button>':''}<span class="hero-count">📷 ${totalMedia}</span></div>`}
@@ -1815,13 +2144,18 @@ async function render(){
     }
     root.appendChild(sec);
   }
-  if(driveAccessToken && (drivePhotosByDate.size||momentoDriveFilesByName.size))observeDriveImages();
+  if(driveAccessToken && (drivePhotosByDate.size||momentoDriveFilesByName.size||swarmDriveFilesByName.size))observeDriveImages();
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
 
 async function exportBackup(){status('バックアップ作成中…');const entries=await all('entries'), medias=await all('media');const zip=new JSZip();zip.file('entries.json',JSON.stringify(entries.map(e=>({...e})),null,2));for(const m of medias)zip.file(`media/${m.id}_${m.name}`,m.blob);const blob=await zip.generateAsync({type:'blob'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`watashi-no-kiroku-backup-${new Date().toISOString().slice(0,10)}.zip`;a.click();status('バックアップを書き出しました')}
 
 $('#swarmTextZip').addEventListener('change',e=>e.target.files[0]&&importSwarmTextZip(e.target.files[0]).catch(err=>status('Swarm差し替えエラー: '+err.message)));
+$('#swarmOfficialFolder')?.addEventListener('change',e=>prepareOfficialSwarmFolder([...e.target.files]).catch(err=>swarmOfficialState('解析エラー：'+err.message)));
+$('#swarmOfficialImportBtn')?.addEventListener('click',()=>importOfficialSwarm().catch(err=>{swarmOfficialState('差し替えエラー：'+err.message);alert(err.message)}));
+$('#swarmOfficialPhotoBtn')?.addEventListener('click',()=>uploadOfficialSwarmPhotos().catch(err=>{swarmOfficialPhotoState('写真追加エラー：'+err.message);alert(err.message)}));
+$('#swarmOfficialPhotoStopBtn')?.addEventListener('click',()=>{swarmOfficialUploadCancelled=true;swarmOfficialPhotoState('中止しています…');});
+
 $('#momentoAppendTextZip')?.addEventListener('change',e=>e.target.files[0]&&importMomentoAppendTextZip(e.target.files[0]).catch(err=>momentoAppendState('追加エラー：'+err.message)));
 $('#momentoAppendPhotoFolder')?.addEventListener('change',e=>chooseMomentoAppendPhotoFolder([...e.target.files]));
 $('#momentoAppendPhotoBtn')?.addEventListener('click',()=>uploadMomentoAppendPhotos().catch(err=>{momentoAppendPhotoState('写真追加エラー：'+err.message);alert(err.message)}));
